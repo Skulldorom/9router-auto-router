@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: 9router-auto-router-production
@@ -73,7 +72,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: npm
       - name: Static checks
         run: npm run check
       - name: Unit, classifier, and routing tests
@@ -107,6 +105,8 @@ jobs:
         run: ./scripts/smoke-test.sh 9router-auto-router:validated
       - name: Runtime response test
         run: ./scripts/runtime-test.sh 9router-auto-router:validated
+      - name: Settings persistence integration test
+        run: ./scripts/settings-persistence-test.sh 9router-auto-router:validated
       - name: Save validated image for the publish job
         run: docker save 9router-auto-router:validated | gzip > validated-image.tar.gz
       - uses: actions/upload-artifact@v7
@@ -118,6 +118,9 @@ jobs:
   publish:
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/download-artifact@v8
         with:

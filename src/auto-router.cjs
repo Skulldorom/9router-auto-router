@@ -15,20 +15,22 @@ const activeAutoCombos = new WeakMap();
 const DEFAULTS = Object.freeze({ easyTarget: "coder", hardTarget: "coder-high", hardThreshold: 6, longContextChars: 24000, largeToolResultChars: 12000, manyTools: 16, verbose: false });
 
 function positiveInt(value, fallback) {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (typeof value !== "string" || !/^\s*[1-9]\d*\s*$/.test(value)) return fallback;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
-function configuredString(explicit, key, legacy, fallback) {
-  if (Object.prototype.hasOwnProperty.call(explicit, key)) return typeof explicit[key] === "string" && explicit[key].trim() ? explicit[key].trim() : fallback;
-  if (typeof legacy === "string" && legacy.trim()) return legacy.trim();
-  return fallback;
+function nonEmptyString(value) { return typeof value === "string" && value.trim() ? value.trim() : null; }
+function validPositiveInt(value) { return Number.isSafeInteger(value) && value > 0 ? value : null; }
+function booleanValue(value) {
+  if (value === true || value === false) return value;
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "true" ? true : normalized === "false" ? false : null;
 }
-
-function configuredPositiveInt(explicit, key, legacy, fallback) {
-  if (Object.prototype.hasOwnProperty.call(explicit, key)) return Number.isSafeInteger(explicit[key]) && explicit[key] > 0 ? explicit[key] : fallback;
-  return positiveInt(legacy, fallback);
-}
+function configuredString(explicit, key, legacy, fallback) { return nonEmptyString(explicit[key]) || nonEmptyString(legacy) || fallback; }
+function configuredPositiveInt(explicit, key, legacy, fallback) { return validPositiveInt(explicit[key]) || positiveInt(legacy, fallback); }
+function configuredBoolean(explicit, key, legacy, fallback) { return booleanValue(explicit[key]) ?? booleanValue(legacy) ?? fallback; }
 
 function getConfig(env = process.env, explicit = {}) {
   const selected = explicit && typeof explicit === "object" && !Array.isArray(explicit) ? explicit : {};
@@ -39,7 +41,7 @@ function getConfig(env = process.env, explicit = {}) {
     longContextChars: configuredPositiveInt(selected, "longContextChars", env.AUTO_ROUTER_LONG_CONTEXT_CHARS, DEFAULTS.longContextChars),
     largeToolResultChars: configuredPositiveInt(selected, "largeToolResultChars", env.AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS, DEFAULTS.largeToolResultChars),
     manyTools: configuredPositiveInt(selected, "manyTools", env.AUTO_ROUTER_MANY_TOOLS, DEFAULTS.manyTools),
-    verbose: Object.prototype.hasOwnProperty.call(selected, "verbose") ? selected.verbose === true : env.AUTO_ROUTER_VERBOSE === "true",
+    verbose: configuredBoolean(selected, "verbose", env.AUTO_ROUTER_VERBOSE, DEFAULTS.verbose),
   };
 }
 

@@ -4,7 +4,7 @@ Small Docker overlay for [decolua/9router](https://github.com/decolua/9router). 
 
 ## UI-first setup
 
-Use `ghcr.io/skulldorom/9router-auto-router:latest` and preserve the existing `/app/data` volume. Open the normal 9Router UI, open **Combos**, create or edit a combo, choose **Auto Router**, select **Easy target** and **Hard target**, optionally expand **Advanced**, and save. No `AUTO_ROUTER_*` variables are required.
+Use `ghcr.io/skulldorom/9router-auto-router:latest` and preserve the existing `/app/data` volume. Open the normal 9Router UI, open **Combos**, create or edit a combo, choose **Auto Router**, select **Easy target** and **Hard target**, optionally expand **Advanced**, and save. The target selectors list existing combos and exclude the combo being edited. No `AUTO_ROUTER_*` variables are required.
 
 The normal Compose example contains only the custom image and normal 9Router persistence. Target combos retain their existing fallback or Round Robin behavior.
 
@@ -27,7 +27,7 @@ The normal Compose example contains only the custom image and normal 9Router per
 }
 ```
 
-The existing `/api/settings` and `/app/data` path persists this per-combo structure. Precedence is explicit `comboStrategies[comboName].autoRouter` field, then the matching legacy `AUTO_ROUTER_*` environment variable, then the built-in default. Legacy environment-only deployments continue to work.
+The existing `/api/settings` and `/app/data` path persists this per-combo structure. Precedence is independently applied to every field: valid `comboStrategies[comboName].autoRouter` value, then a valid matching legacy `AUTO_ROUTER_*` environment value, then the built-in default. Empty targets, non-positive/non-integer thresholds, and non-boolean verbose values are invalid and therefore fall through to the next source. Legacy environment-only deployments continue to work.
 
 ```
 OpenHands
@@ -78,11 +78,11 @@ The current upstream UI has a compact serialized combo strategy list in one serv
 
 Create ordinary `coder` and `coder-high` combos first. Configure their existing fallback/round-robin chains normally. Create `coder-auto` with a non-empty placeholder model list if required by the upstream combo editor; its placeholder members are never executed once its strategy is `auto`.
 
-Select **Auto Router** in the normal Combo strategy selector. The editor then exposes Easy target, Hard target, and Advanced settings. Do not configure `coder` or `coder-high` as `auto`, and never target `coder-auto`. Direct, target, and per-request re-entry cycles return `400` instead of recursing.
+Select **Auto Router** in the normal Combo strategy selector. The editor exposes labeled **Easy target** and **Hard target** selectors, plus **Advanced** controls for **Hard threshold**, **Long context threshold (characters)**, **Large tool-result threshold (characters)**, **Many-tools threshold**, and **Verbose logging**. Do not configure `coder` or `coder-high` as `auto`, and never target `coder-auto`. Direct, target, and per-request re-entry cycles return `400` instead of recursing.
 
 ### Legacy environment compatibility
 
-Existing deployments may retain `AUTO_ROUTER_*` variables. They are optional compatibility fallbacks, not the normal setup path. Per-combo UI fields take precedence over environment values, and missing fields use the built-in defaults listed below.
+Existing deployments may retain `AUTO_ROUTER_*` variables. They are optional compatibility fallbacks, not the normal setup path. Each valid per-combo UI field takes precedence over its matching environment value; missing or invalid UI fields use a valid environment value, otherwise the built-in default listed below.
 
 Point OpenHands at the standard 9Router OpenAI-compatible endpoint with `model = coder-auto`. Classification is stateless and reads the request's supplied Chat `messages`, Responses `input`, or translated `contents`; a later `continue` can therefore use the supplied earlier history.
 
@@ -148,8 +148,6 @@ services:
     environment:
       DATA_DIR: /app/data
       HEADROOM_URL: http://headroom:8787
-      AUTO_ROUTER_EASY_TARGET: coder
-      AUTO_ROUTER_HARD_TARGET: coder-high
     depends_on:
       headroom:
         condition: service_started
@@ -184,6 +182,10 @@ services:
 
 The GitHub Actions release workflow validates the exact `decolua/9router@sha256:...` base before building. It runs static checks, all tests, compatibility discovery, Docker smoke tests, and a live container response test before it authenticates and updates `latest`. A six-hour scheduled check rebuilds only if this source commit or the upstream digest changed; failed validation leaves the prior known-good `latest` untouched.
 
+## Dependabot
+
+Dependabot checks the only ordinary dependency ecosystems in this overlay: `npm` and GitHub Actions, weekly. Compatible minor and patch updates are grouped; major updates remain separate. It does not auto-merge. Docker is deliberately not included: `decolua/9router:latest` is resolved by the dedicated current-upstream digest-validation pipeline, tested at that exact immutable digest, and only then used to publish. A blind Docker digest bump would weaken that release gate. Dependabot pull requests run the same blocking current-upstream CI job.
+
 ## Development and advanced local builds
 
 Local builds are for development, upstream compatibility work, or testing a candidate image. Use the immutable upstream digest that passed compatibility checks; do not treat a mutable `latest` tag as reproducible.
@@ -203,4 +205,4 @@ docker build \
 
 Compatibility errors report the image, candidate count/files, expected semantic anchors, and failure reason without dumping minified source. Do not force an incompatible build; update the guarded discovery and tests after reviewing upstream changes.
 
-No runtime dependencies are added. Tests cover deterministic classification, realistic sanitized OpenHands fixtures, history reclassification, bounded keyword scoring, modality weighting, one-route/no-fan-out selection, body/tools/stream preservation, nested delegation, recursion protection, semantic discovery, zero/multiple candidate failures, idempotence, compatibility checks, Docker build, smoke tests, and runtime responses.
+No runtime dependencies are added. Tests cover deterministic classification, realistic sanitized OpenHands fixtures, history reclassification, bounded keyword scoring, modality weighting, one-route/no-fan-out selection, body/tools/stream preservation, nested delegation, recursion protection, per-field precedence, server/client UI semantic fixtures, labels, empty-self target filtering, semantic discovery, zero/multiple/ambiguous candidate failures, idempotence, compatibility checks, Docker build, smoke tests, runtime responses, and authenticated `/api/settings` persistence across a restart.

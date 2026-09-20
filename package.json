@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/auto-router.cjs && node --check patches/apply-patch.mjs && node --check test/classifier.test.mjs && node --check test/routing.test.mjs"
+    "check": "node --check src/auto-router.cjs && node --check patches/apply-patch.mjs && node --check test/*.mjs"
   },
   "engines": {
     "node": ">=20"

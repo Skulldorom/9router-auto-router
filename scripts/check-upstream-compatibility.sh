@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-IMAGE="${UPSTREAM_IMAGE:-decolua/9router:0.5.75}"
+IMAGE="${UPSTREAM_IMAGE:-decolua/9router:latest}"
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 if ! command -v docker >/dev/null 2>&1; then echo "9Router Auto Router compatibility check failed. Docker is required." >&2; exit 1; fi
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker pull "$IMAGE" >/dev/null

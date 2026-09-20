@@ -4,16 +4,13 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      upstream_image:
-        description: Supported 9Router image to validate
-        required: false
-        default: decolua/9router:0.5.75
+
+permissions:
+  contents: read
+
 jobs:
   test-build:
     runs-on: ubuntu-latest
-    env:
-      UPSTREAM_IMAGE: ${{ inputs.upstream_image || 'decolua/9router:0.5.75' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -21,17 +18,22 @@ jobs:
           node-version: 22
       - run: npm run check
       - run: npm test
-      - run: ./scripts/check-upstream-compatibility.sh
-      - run: docker build --build-arg UPSTREAM_IMAGE="$UPSTREAM_IMAGE" -t 9router-auto-router:ci .
-      - run: ./scripts/smoke-test.sh 9router-auto-router:ci
-  latest-compatibility:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    env:
-      UPSTREAM_IMAGE: decolua/9router:latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-      - run: ./scripts/check-upstream-compatibility.sh
+      - name: Resolve current upstream image to an immutable digest
+        run: |
+          set -eu
+          docker buildx imagetools inspect decolua/9router:latest > upstream-inspect.txt
+          digest=$(sed -n 's/^Digest:[[:space:]]*//p' upstream-inspect.txt | head -n1)
+          test -n "$digest"
+          immutable_image="decolua/9router@${digest}"
+          docker pull "$immutable_image"
+          printf 'UPSTREAM_IMAGE=%s\nUPSTREAM_DIGEST=%s\n' "$immutable_image" "$digest" >> "$GITHUB_ENV"
+      - name: Compatibility check against the immutable current upstream image
+        run: ./scripts/check-upstream-compatibility.sh
+      - name: Build derived image from the validated immutable upstream image
+        run: docker build --build-arg UPSTREAM_IMAGE="$UPSTREAM_IMAGE" -t 9router-auto-router:ci .
+      - name: Docker smoke test
+        run: ./scripts/smoke-test.sh 9router-auto-router:ci
+      - name: Runtime response test
+        run: ./scripts/runtime-test.sh 9router-auto-router:ci
+      - name: Settings persistence integration test
+        run: ./scripts/settings-persistence-test.sh 9router-auto-router:ci

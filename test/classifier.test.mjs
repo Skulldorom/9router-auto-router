@@ -104,11 +104,23 @@ test("two Auto Router combos keep independent targets and thresholds", () => {
   assert.equal(selectRoute(hard, "first", { comboStrategies }).target, "deep");
 });
 
-test("invalid explicit numeric values fail safely to built-in defaults", () => {
+test("invalid explicit numeric values fall back to valid legacy values", () => {
   const result = selectRoute(message("hello"), "coder-auto", {
     env: { AUTO_ROUTER_HARD_THRESHOLD: "2" },
     comboStrategies: { "coder-auto": { autoRouter: { hardThreshold: -1, longContextChars: "bad" } } },
   });
-  assert.equal(result.config.hardThreshold, 6);
+  assert.equal(result.config.hardThreshold, 2);
   assert.equal(result.config.longContextChars, 24000);
+});
+
+
+test("invalid per-combo fields independently fall back to valid legacy values", () => {
+  const config = router.getConfig({ AUTO_ROUTER_EASY_TARGET: "env-easy", AUTO_ROUTER_HARD_TARGET: "env-hard", AUTO_ROUTER_HARD_THRESHOLD: "8", AUTO_ROUTER_LONG_CONTEXT_CHARS: "28000", AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS: "14000", AUTO_ROUTER_MANY_TOOLS: "18", AUTO_ROUTER_VERBOSE: "true" }, { easyTarget: " ", hardTarget: null, hardThreshold: -1, longContextChars: "bad", largeToolResultChars: 0, manyTools: 1.5, verbose: "invalid" });
+  assert.deepEqual(config, { easyTarget: "env-easy", hardTarget: "env-hard", hardThreshold: 8, longContextChars: 28000, largeToolResultChars: 14000, manyTools: 18, verbose: true });
+});
+
+test("invalid UI and legacy values use defaults while boolean parsing is deliberate", () => {
+  const config = router.getConfig({ AUTO_ROUTER_HARD_THRESHOLD: "bad", AUTO_ROUTER_VERBOSE: "yes" }, { hardThreshold: -1, verbose: "truthy" });
+  assert.equal(config.hardThreshold, 6); assert.equal(config.verbose, false);
+  assert.equal(router.getConfig({ AUTO_ROUTER_VERBOSE: "FALSE" }, {}).verbose, false);
 });
