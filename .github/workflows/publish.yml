@@ -26,7 +26,7 @@ jobs:
       build: ${{ steps.decision.outputs.build }}
       upstream_digest: ${{ steps.upstream.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: upstream
@@ -67,7 +67,7 @@ jobs:
       upstream_digest: ${{ steps.metadata.outputs.upstream_digest }}
       upstream_version: ${{ steps.metadata.outputs.upstream_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
