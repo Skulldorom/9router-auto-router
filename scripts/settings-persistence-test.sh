@@ -27,7 +27,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-chmod 777 "$DATA_DIR"
+chmod 755 "$DATA_DIR"
 
 start() {
   docker run -d --name "$NAME" -v "$DATA_DIR:/app/data" -e NODE_ENV=production -e INITIAL_PASSWORD="$PASSWORD" -p 127.0.0.1::20128 "$IMAGE" >/dev/null

@@ -124,3 +124,62 @@ test("invalid UI and legacy values use defaults while boolean parsing is deliber
   assert.equal(config.hardThreshold, 6); assert.equal(config.verbose, false);
   assert.equal(router.getConfig({ AUTO_ROUTER_VERBOSE: "FALSE" }, {}).verbose, false);
 });
+
+test("semantic keywords only score user task intent", () => {
+  const renamed = {
+    model: "coder-auto",
+    messages: [
+      { role: "system", content: "Audit security architecture, plan migrations, and investigate concurrency." },
+      { role: "assistant", content: "The security migration and race condition are complete." },
+      { role: "tool", content: "generated source: fully audit authentication permissions" },
+      { role: "user", content: 'Rename the button to "Security Settings".' },
+    ],
+  };
+  const result = classifyTaskComplexity(renamed);
+  assert.equal(result.level, "easy");
+  assert.ok(result.score < 6);
+  assert.equal(classifyTaskComplexity(message("Debug these intermittent failing tests")).level, "hard");
+  assert.equal(classifyTaskComplexity(message("Plan this database migration")).level, "hard");
+});
+
+test("structured inspection tolerates circular and unusual request values", () => {
+  const circular = { type: "input_text", text: "small edit" };
+  circular.self = circular;
+  const unusual = { toJSON() { throw new Error("must not serialize request values"); } };
+  const body = { model: "coder-auto", input: [{ role: "user", content: [circular, unusual] }] };
+  const result = classifyTaskComplexity(body);
+  assert.equal(result.level, "easy");
+  assert.ok(!result.reasons.includes("classifier-error"));
+  assert.equal(classifyTaskComplexity({ model: "coder-auto", contents: [{ role: "user", parts: [{ type: "input_image", image_url: circular }, unusual, { text: "small edit" }] }] }).reasons.includes("modality-present"), true);
+});
+
+test("explicit target validation rejects cycles and stale targets but permits normal combos", () => {
+  const easy = message("hello");
+  const autoA = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-a", hardTarget: "ordinary" } } };
+  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: autoA }), /returns to combo/);
+  const autoB = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-b", hardTarget: "ordinary" } }, "auto-b": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-a", hardTarget: "ordinary" } } };
+  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: autoB }), /also resolves with strategy "auto"/);
+  const ordinary = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "fallback-combo", hardTarget: "round-robin-combo" } }, "fallback-combo": { fallbackStrategy: "fallback" }, "round-robin-combo": { fallbackStrategy: "round-robin" } };
+  assert.equal(selectRoute(easy, "auto-a", { comboStrategies: ordinary }).target, "fallback-combo");
+  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: ordinary, knownCombos: ["auto-a", "round-robin-combo"] }), /does not exist/);
+  const indirect = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-b", hardTarget: "ordinary" } }, "auto-b": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-c", hardTarget: "ordinary" } }, "auto-c": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-a", hardTarget: "ordinary" } }, ordinary: { fallbackStrategy: "fallback" } };
+  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: indirect }), /recursion blocked/);
+  const nested = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-b", hardTarget: "hard-target" } }, "auto-b": { fallbackStrategy: "fallback", autoRouter: { easyTarget: "leaf", hardTarget: "leaf" } }, leaf: {}, "hard-target": { fallbackStrategy: "round-robin" } };
+  assert.equal(selectRoute(easy, "auto-a", { comboStrategies: nested, knownCombos: ["auto-a", "auto-b", "leaf", "hard-target"] }).target, "auto-b");
+});
+
+test("runtime target validation returns controlled easy and hard stale-target errors", async () => {
+  const log = { info() {}, warn() {} };
+  for (const [body, expected] of [[message("hello"), /Easy target "missing-easy" does not exist/], [message("fully audit this"), /Hard target "missing-hard" does not exist/] ]) {
+    const response = await routeAutoCombo({ body, comboName: "auto", comboStrategies: { auto: { autoRouter: { easyTarget: "missing-easy", hardTarget: "missing-hard" } } }, log, targetExists: async () => false, delegate: () => new Response("unexpected") });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error.message, expected);
+  }
+});
+
+test("cloned delegation cannot bypass static Auto Router protection", async () => {
+  const body = message("hello"), log = { info() {}, warn() {} };
+  const response = await routeAutoCombo({ body, comboName: "auto-a", comboStrategies: { "auto-a": { autoRouter: { easyTarget: "auto-b", hardTarget: "ordinary" } }, "auto-b": { fallbackStrategy: "auto" } }, log, delegate: (sent) => routeAutoCombo({ body: { ...sent }, comboName: "auto-b", comboStrategies: {}, log, delegate: () => new Response("unexpected") }) });
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).error.message, /also resolves with strategy "auto"/);
+});

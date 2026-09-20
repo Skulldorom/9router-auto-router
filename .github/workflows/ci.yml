@@ -37,3 +37,5 @@ jobs:
         run: ./scripts/runtime-test.sh 9router-auto-router:ci
       - name: Settings persistence integration test
         run: ./scripts/settings-persistence-test.sh 9router-auto-router:ci
+      - name: Auto Router production HTTP integration test
+        run: ./scripts/auto-router-http-test.sh 9router-auto-router:ci
