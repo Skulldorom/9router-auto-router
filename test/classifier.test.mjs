@@ -125,6 +125,29 @@ test("invalid UI and legacy values use defaults while boolean parsing is deliber
   assert.equal(router.getConfig({ AUTO_ROUTER_VERBOSE: "FALSE" }, {}).verbose, false);
 });
 
+test("generic domain nouns do not push simple label edits to hard", () => {
+  for (const prompt of [
+    'Rename the "Authentication" menu item',
+    "Change the Permissions button label",
+    "Rename Architecture to System Design",
+    "Update the Security Settings heading text",
+    "Rename the Data Migration report title",
+  ]) {
+    const result = classifyTaskComplexity(message(prompt));
+    assert.equal(result.level, "easy", prompt);
+    assert.ok(result.score < 6, prompt);
+  }
+});
+
+test("genuinely complex security/architecture/migration requests still route hard", () => {
+  for (const prompt of [
+    "Fully audit the authentication and permissions implementation.",
+    "Investigate the security architecture for authentication flaws.",
+    "Refactor the authentication, permissions, and architecture across the service.",
+    "Plan a database migration with rollback safety.",
+  ]) assert.equal(classifyTaskComplexity(message(prompt)).level, "hard", prompt);
+});
+
 test("semantic keywords only score user task intent", () => {
   const renamed = {
     model: "coder-auto",
@@ -153,19 +176,26 @@ test("structured inspection tolerates circular and unusual request values", () =
   assert.equal(classifyTaskComplexity({ model: "coder-auto", contents: [{ role: "user", parts: [{ type: "input_image", image_url: circular }, unusual, { text: "small edit" }] }] }).reasons.includes("modality-present"), true);
 });
 
-test("explicit target validation rejects cycles and stale targets but permits normal combos", () => {
-  const easy = message("hello");
-  const autoA = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-a", hardTarget: "ordinary" } } };
-  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: autoA }), /returns to combo/);
-  const autoB = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-b", hardTarget: "ordinary" } }, "auto-b": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-a", hardTarget: "ordinary" } } };
-  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: autoB }), /also resolves with strategy "auto"/);
-  const ordinary = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "fallback-combo", hardTarget: "round-robin-combo" } }, "fallback-combo": { fallbackStrategy: "fallback" }, "round-robin-combo": { fallbackStrategy: "round-robin" } };
-  assert.equal(selectRoute(easy, "auto-a", { comboStrategies: ordinary }).target, "fallback-combo");
-  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: ordinary, knownCombos: ["auto-a", "round-robin-combo"] }), /does not exist/);
+test("explicit target validation rejects self-targets, auto targets, and stale targets but permits normal combos", () => {
+  const easy = message("hello"), hard = message("fully audit this concurrency race condition");
+  // Direct self-reference: the easy target is the Auto Router combo itself.
+  const selfEasy = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-a", hardTarget: "ordinary" } }, ordinary: { fallbackStrategy: "fallback" } };
+  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: selfEasy }), /is the Auto Router combo itself/);
+  // Direct self-reference from the hard branch.
+  const selfHard = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "ordinary", hardTarget: "auto-a" } }, ordinary: { fallbackStrategy: "fallback" } };
+  assert.throws(() => selectRoute(hard, "auto-a", { comboStrategies: selfHard }), /is the Auto Router combo itself/);
+  // Target configured with fallbackStrategy: "auto" — Auto Router → Auto Router is unsupported.
+  const autoTarget = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-b", hardTarget: "ordinary" } }, "auto-b": { fallbackStrategy: "auto" }, ordinary: { fallbackStrategy: "fallback" } };
+  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: autoTarget }), /chaining is not supported/);
+  // No indirect graph traversal is claimed: a chain to another Auto Router is rejected at the direct hop.
   const indirect = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-b", hardTarget: "ordinary" } }, "auto-b": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-c", hardTarget: "ordinary" } }, "auto-c": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-a", hardTarget: "ordinary" } }, ordinary: { fallbackStrategy: "fallback" } };
-  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: indirect }), /recursion blocked/);
-  const nested = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "auto-b", hardTarget: "hard-target" } }, "auto-b": { fallbackStrategy: "fallback", autoRouter: { easyTarget: "leaf", hardTarget: "leaf" } }, leaf: {}, "hard-target": { fallbackStrategy: "round-robin" } };
-  assert.equal(selectRoute(easy, "auto-a", { comboStrategies: nested, knownCombos: ["auto-a", "auto-b", "leaf", "hard-target"] }).target, "auto-b");
+  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: indirect }), /chaining is not supported/);
+  // Ordinary fallback/round-robin targets remain valid, including when combo existence is known.
+  const ordinary = { "auto-a": { fallbackStrategy: "auto", autoRouter: { easyTarget: "fallback-combo", hardTarget: "round-robin-combo" } }, "fallback-combo": { fallbackStrategy: "fallback" }, "round-robin-combo": { fallbackStrategy: "round-robin" } };
+  assert.equal(selectRoute(easy, "auto-a", { comboStrategies: ordinary, knownCombos: ["auto-a", "fallback-combo", "round-robin-combo"] }).target, "fallback-combo");
+  assert.equal(selectRoute(hard, "auto-a", { comboStrategies: ordinary, knownCombos: ["auto-a", "fallback-combo", "round-robin-combo"] }).target, "round-robin-combo");
+  // Stale target with combo information available fails with a specific message.
+  assert.throws(() => selectRoute(easy, "auto-a", { comboStrategies: ordinary, knownCombos: ["auto-a", "round-robin-combo"] }), /Easy target "fallback-combo" does not exist/);
 });
 
 test("runtime target validation returns controlled easy and hard stale-target errors", async () => {
@@ -181,5 +211,5 @@ test("cloned delegation cannot bypass static Auto Router protection", async () =
   const body = message("hello"), log = { info() {}, warn() {} };
   const response = await routeAutoCombo({ body, comboName: "auto-a", comboStrategies: { "auto-a": { autoRouter: { easyTarget: "auto-b", hardTarget: "ordinary" } }, "auto-b": { fallbackStrategy: "auto" } }, log, delegate: (sent) => routeAutoCombo({ body: { ...sent }, comboName: "auto-b", comboStrategies: {}, log, delegate: () => new Response("unexpected") }) });
   assert.equal(response.status, 400);
-  assert.match((await response.json()).error.message, /also resolves with strategy "auto"/);
+  assert.match((await response.json()).error.message, /chaining is not supported/);
 });

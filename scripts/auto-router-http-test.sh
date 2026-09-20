@@ -5,29 +5,34 @@ SUFFIX=$$
 NAME="9router-auto-router-http-${SUFFIX}"
 NETWORK="9router-auto-router-http-net-${SUFFIX}"
 MOCK_NAME="${NETWORK}-mock"
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$ROOT/scripts/lib-container-test.sh"
 DATA_DIR=$(mktemp -d)
 MOCK_DIR=$(mktemp -d)
-COOKIE_JAR="${DATA_DIR}/cookies.txt"
+WORK_DIR=$(mktemp -d)
+# Keep the cookie jar off the bind mount: the image entrypoint chowns /app/data to
+# its runtime user, which would otherwise make the runner-owned jar unwritable.
+COOKIE_JAR="${WORK_DIR}/cookies.txt"
 PASSWORD="auto-router-http-test-password"
 OWNER_UID=$(id -u)
 OWNER_GID=$(id -g)
+RUNTIME_USER=$(container_runtime_user "$IMAGE")
 cleanup() {
   status=$?
   trap - EXIT INT TERM
   docker rm -f "$NAME" "$MOCK_NAME" >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
-  for dir in "$DATA_DIR" "$MOCK_DIR"; do
-    [ -d "$dir" ] || continue
-    if rmdir "$dir" 2>/dev/null; then continue; fi
-    docker run --rm --user 0:0 --entrypoint /bin/sh -v "$dir:/cleanup" "$IMAGE" -c 'find /cleanup -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; chown "$1:$2" /cleanup' -- "$OWNER_UID" "$OWNER_GID" || true
-    rmdir "$dir" || { [ "$status" -ne 0 ] && exit "$status"; exit 1; }
-  done
+  rm -rf "$WORK_DIR" 2>/dev/null || true
+  purge_dir "$IMAGE" "$DATA_DIR" "$OWNER_UID" "$OWNER_GID" || { [ "$status" -ne 0 ] && exit "$status"; exit 1; }
+  purge_dir "$IMAGE" "$MOCK_DIR" "$OWNER_UID" "$OWNER_GID" || { [ "$status" -ne 0 ] && exit "$status"; exit 1; }
   exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-chmod 755 "$DATA_DIR" "$MOCK_DIR"
+# The bind mount must be writable by the image's actual runtime user, not a guessed UID.
+prepare_data_dir "$IMAGE" "$DATA_DIR" "$RUNTIME_USER"
+chmod 755 "$MOCK_DIR"
 
 cat > "${MOCK_DIR}/server.cjs" <<'NODE'
 const fs = require("fs"), http = require("http");
@@ -48,17 +53,15 @@ docker network create "$NETWORK" >/dev/null
 docker run -d --name "$MOCK_NAME" --network "$NETWORK" -v "${MOCK_DIR}:/journal" -w /journal node:22-alpine node /journal/server.cjs >/dev/null
 docker run -d --name "$NAME" --network "$NETWORK" -v "${DATA_DIR}:/app/data" -e NODE_ENV=production -e INITIAL_PASSWORD="$PASSWORD" -p 127.0.0.1::20128 "$IMAGE" >/dev/null
 PORT=$(docker port "$NAME" 20128/tcp | sed 's/.*://')
-for attempt in $(seq 1 30); do
-  status=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${PORT}/api/auth/login" || true)
-  [ "$status" != 000 ] && break
-  sleep 1
-done
-[ "${status:-000}" != 000 ] || { docker logs "$NAME" >&2 || true; exit 1; }
-curl --fail --silent --show-error --cookie "$COOKIE_JAR" --cookie-jar "$COOKIE_JAR" -H 'Content-Type: application/json' --data "{\"password\":\"${PASSWORD}\"}" "http://127.0.0.1:${PORT}/api/auth/login" >/dev/null
+if ! wait_for_login "http://127.0.0.1:${PORT}/api/auth/login" "$COOKIE_JAR" "$PASSWORD" 60; then
+  dump_container_logs "$NAME"
+  echo "Auto Router HTTP test failed: login did not succeed (last status ${last_status:-none})." >&2
+  exit 1
+fi
 api() { curl --fail --silent --show-error --max-time 20 --cookie "$COOKIE_JAR" -H 'Content-Type: application/json' "$@"; }
 
 api -X POST --data "{\"provider\":\"ollama-local\",\"name\":\"mock\",\"apiKey\":\"test\",\"providerSpecificData\":{\"baseUrl\":\"http://${MOCK_NAME}:8080\"}}" "http://127.0.0.1:${PORT}/api/providers" >/dev/null
-for combo in easy hard agent fallback-combo; do api -X POST --data "{\"name\":\"${combo}\",\"models\":[\"ollama-local/${combo}-model\"]}" "http://127.0.0.1:${PORT}/api/combos" >/dev/null; done
+for combo in easy hard agent fallback-combo auto-target; do api -X POST --data "{\"name\":\"${combo}\",\"models\":[\"ollama-local/${combo}-model\"]}" "http://127.0.0.1:${PORT}/api/combos" >/dev/null; done
 API_KEY=$(api -X POST --data '{"name":"integration"}' "http://127.0.0.1:${PORT}/api/keys" | node -e 'let data="";process.stdin.on("data",chunk=>data+=chunk);process.stdin.on("end",()=>process.stdout.write(JSON.parse(data).key))')
 set_auto() { api -X PATCH --data "{\"comboStrategies\":{\"agent\":{\"fallbackStrategy\":\"auto\",\"autoRouter\":${1}}}}" "http://127.0.0.1:${PORT}/api/settings" >/dev/null; }
 complete() { curl --silent --show-error --max-time 20 -H 'Content-Type: application/json' -H "Authorization: Bearer ${API_KEY}" --data "$1" "http://127.0.0.1:${PORT}/api/v1/chat/completions"; }
@@ -66,8 +69,8 @@ journal() { cat "${MOCK_DIR}/requests.jsonl" 2>/dev/null || true; }
 count_model() { journal | grep -c "$1" || true; }
 expect_error() {
   response=$(complete "$1")
-  printf '%s' "$response" | grep -q 'AUTO-ROUTER' || { echo "Expected a controlled Auto Router error for ${1}, got: ${response}" >&2; docker logs "$NAME" >&2 || true; exit 1; }
-  printf '%s' "$response" | grep -q "$2" || { echo "Expected '${2}' for ${1}, got: ${response}" >&2; docker logs "$NAME" >&2 || true; exit 1; }
+  printf '%s' "$response" | grep -q 'AUTO-ROUTER' || { echo "Expected a controlled Auto Router error for ${1}, got: ${response}" >&2; dump_container_logs "$NAME"; exit 1; }
+  printf '%s' "$response" | grep -q "$2" || { echo "Expected '${2}' for ${1}, got: ${response}" >&2; dump_container_logs "$NAME"; exit 1; }
   return 0
 }
 
@@ -106,11 +109,16 @@ expect_error '{"model":"agent","messages":[{"role":"user","content":"rename this
 set_auto '{"easyTarget":"easy","hardTarget":"ghost-hard"}'
 expect_error '{"model":"agent","messages":[{"role":"user","content":"fully audit this repository concurrency race condition"}]}' 'Hard target .*ghost-hard.* does not exist'
 set_auto '{"easyTarget":"agent","hardTarget":"hard"}'
-expect_error '{"model":"agent","messages":[{"role":"user","content":"rename this button"}]}' 'recursion blocked'
+expect_error '{"model":"agent","messages":[{"role":"user","content":"rename this button"}]}' 'is the Auto Router combo itself'
+
+# Auto Router → Auto Router chaining is explicitly unsupported: even a stale-free
+# target configured with fallbackStrategy "auto" must fail closed.
+api -X PATCH --data '{"comboStrategies":{"agent":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"auto-target","hardTarget":"hard"}},"auto-target":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"easy","hardTarget":"hard"}}}}' "http://127.0.0.1:${PORT}/api/settings" >/dev/null
+expect_error '{"model":"agent","messages":[{"role":"user","content":"rename this button"}]}' 'chaining is not supported'
 
 api -X PATCH --data '{"comboStrategies":{"agent":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"fallback-combo","hardTarget":"hard"}},"fallback-combo":{"fallbackStrategy":"fallback"}}}' "http://127.0.0.1:${PORT}/api/settings" >/dev/null
 fallback_response=$(complete '{"model":"agent","messages":[{"role":"user","content":"rename this button sentinel-fallback"}]}')
 printf '%s' "$fallback_response" | grep -q 'mock' || { echo "Ordinary fallback target failed: ${fallback_response}" >&2; exit 1; }
 [ "$(count_model fallback-combo-model)" -eq 1 ] || { echo "Ordinary fallback target was not executed normally." >&2; exit 1; }
 
-echo "Auto Router HTTP integration test passed: patched HTTP path selects exactly one target, preserves body/stream/tools, delegates into normal 9Router combo handling, and fails closed on cycles and stale targets."
+echo "Auto Router HTTP integration test passed: patched HTTP path selects exactly one target, preserves body/stream/tools, delegates into normal 9Router combo handling, and fails closed on self/auto/stale targets."

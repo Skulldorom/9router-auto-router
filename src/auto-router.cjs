@@ -1,16 +1,39 @@
 "use strict";
 
-const KEYWORD_GROUPS = Object.freeze([
-  { reason: "audit", terms: ["fully audit", "deep review", "audit"] },
+// Weak domain nouns ("security", "authentication", "permissions") and structural
+// change nouns ("architecture", "migration") are common as labels, e.g.
+// 'Rename the "Authentication" menu item'. They only contribute when the same user
+// text also carries a task-oriented action word. Unconditional task phrases
+// ("fully audit", "race condition", ...) always contribute.
+const TASK_ACTION_TERMS = [
+  "audit", "review", "investigate", "analyze", "analyse", "assess", "diagnose",
+  "debug", "refactor", "redesign", "restructure", "harden",
+  "optimize", "optimise", "benchmark", "profile", "trace", "reproduce", "resolve",
+  "rewrite", "overhaul", "plan", "implement", "survey",
+];
+const STRONG_TASK_PHRASES = Object.freeze([
+  { reason: "audit", terms: ["fully audit", "deep review"] },
   { reason: "concurrency", terms: ["race condition", "concurrency", "stale-write", "stale write"] },
-  { reason: "root-cause", terms: ["root cause", "debug intermittent", "intermittent failing tests", "failing tests with unclear cause", "investigate"] },
+  { reason: "root-cause", terms: ["root cause", "debug intermittent", "intermittent failing tests", "failing tests with unclear cause"] },
   { reason: "precision", terms: ["financial precision", "decimal precision"] },
-  { reason: "architecture", terms: ["architecture", "migration", "repository-wide", "multi-file", "refactor"] },
-  { reason: "security", terms: ["security", "authentication", "permissions"] },
   { reason: "performance", terms: ["performance investigation"] },
+  { reason: "architecture", terms: ["repository-wide", "multi-file"] },
 ]);
-const STRONG_TERMS = new Set(["fully audit", "deep review", "root cause", "race condition", "financial precision", "decimal precision", "performance investigation", "debug intermittent", "intermittent failing tests", "failing tests with unclear cause", "migration", "concurrency"]);
-const HARD_TERMS = KEYWORD_GROUPS.flatMap((group) => group.terms);
+const GATED_STRUCTURAL_TERMS = Object.freeze([
+  { reason: "migration", terms: ["migration", "migrate"] },
+  { reason: "architecture", terms: ["architecture"] },
+]);
+const WEAK_DOMAIN_TERMS = Object.freeze([
+  { reason: "security", terms: ["security", "authentication", "permissions"] },
+]);
+const STRONG_TERMS = new Set(STRONG_TASK_PHRASES.flatMap((group) => group.terms));
+const WEAK_TERMS = new Set([...GATED_STRUCTURAL_TERMS, ...WEAK_DOMAIN_TERMS].flatMap((group) => group.terms));
+const HARD_TERMS = [...STRONG_TERMS, ...WEAK_TERMS];
+const STRONG_WEIGHT = 6;
+// Gated structural work ("plan a database migration") carries full weight once task
+// language is present; a lone security/architecture noun stays sub-threshold.
+const GATED_WEIGHT = 6;
+const WEAK_WEIGHT = 3;
 const activeAutoCombos = new WeakMap();
 const DEFAULTS = Object.freeze({ easyTarget: "coder", hardTarget: "coder-high", hardThreshold: 6, longContextChars: 24000, largeToolResultChars: 12000, manyTools: 16, verbose: false });
 const TEXT_FIELDS = new Set(["text", "content", "input_text", "output_text", "arguments", "output"]);
@@ -125,12 +148,16 @@ function inspectRequest(body) {
   return state;
 }
 function normalizeTools(body) { return Array.isArray(own(body, "tools")) ? own(body, "tools") : Array.isArray(own(body, "functions")) ? own(body, "functions") : []; }
-function addKeywordScore(text, multiplier, add) {
+function keywordMatches(text) {
   const normalized = text.toLowerCase();
-  for (const group of KEYWORD_GROUPS) {
-    const matched = group.terms.filter((term) => normalized.includes(term));
-    if (matched.length) add((matched.some((term) => STRONG_TERMS.has(term)) ? 6 : 3) * multiplier, group.reason);
-  }
+  const reasonsFor = (groups) => groups.filter((group) => group.terms.some((term) => normalized.includes(term))).map((group) => group.reason);
+  const strong = reasonsFor(STRONG_TASK_PHRASES);
+  const taskOriented = TASK_ACTION_TERMS.some((term) => normalized.includes(term));
+  return {
+    strong,
+    gated: taskOriented ? reasonsFor(GATED_STRUCTURAL_TERMS) : [],
+    weak: taskOriented ? reasonsFor(WEAK_DOMAIN_TERMS) : [],
+  };
 }
 
 function classifyTaskComplexity(body, config = getConfig()) {
@@ -154,8 +181,16 @@ function classifyTaskComplexity(body, config = getConfig()) {
     if (state.modalities >= 3) add(2, "multiple-modalities");
     else if (state.modalities > 0) add(1, "modality-present");
     const latest = state.userTexts.at(-1) || "";
-    addKeywordScore(latest, 1, add);
-    for (const previous of state.userTexts.slice(0, -1)) addKeywordScore(previous, 1 / 3, add);
+    const latestMatches = keywordMatches(latest);
+    for (const reason of latestMatches.strong) add(STRONG_WEIGHT, reason);
+    for (const reason of latestMatches.gated) add(GATED_WEIGHT, reason);
+    for (const reason of latestMatches.weak) add(WEAK_WEIGHT, reason);
+    for (const previous of state.userTexts.slice(0, -1)) {
+      const previousMatches = keywordMatches(previous);
+      for (const reason of previousMatches.strong) add(STRONG_WEIGHT / 3, reason);
+      for (const reason of previousMatches.gated) add(GATED_WEIGHT / 3, reason);
+      for (const reason of previousMatches.weak) add(WEAK_WEIGHT / 3, reason);
+    }
     score = Math.min(score, config.hardThreshold + 1);
     return { level: score >= config.hardThreshold ? "hard" : "easy", score, reasons: [...new Set(reasons)], metadata: { chars: state.chars, messages: state.messageCount, tools: tools.length, toolCalls: state.toolCalls, toolResults: state.toolResults, toolResultChars: state.toolResultChars, modalities: state.modalities } };
   } catch {
@@ -164,40 +199,31 @@ function classifyTaskComplexity(body, config = getConfig()) {
 }
 
 function strategyFor(comboName, comboStrategies, globalStrategy) { return comboStrategies?.[comboName]?.fallbackStrategy || globalStrategy; }
-function autoTargetsFor(comboName, comboStrategies, globalStrategy) {
-  if (strategyFor(comboName, comboStrategies, globalStrategy) !== "auto") return [];
-  const autoRouter = comboStrategies?.[comboName]?.autoRouter;
-  if (!autoRouter || typeof autoRouter !== "object") return [];
-  return [autoRouter.easyTarget, autoRouter.hardTarget].filter((value) => nonEmptyString(value));
-}
-function validateAutoTarget(comboName, target, comboStrategies, globalStrategy, knownCombos) {
-  if (knownCombos && !knownCombos.has(target)) throw new Error(`Easy or hard target "${target}" does not exist.`);
-  const visited = new Set([comboName]);
-  const pending = [target];
-  while (pending.length) {
-    const current = pending.pop();
-    if (visited.has(current)) throw new Error(`AUTO-ROUTER recursion blocked: target chain returns to combo "${current}".`);
-    if (strategyFor(current, comboStrategies, globalStrategy) !== "auto") continue;
-    if (current === target) throw new Error(`AUTO-ROUTER recursion blocked: target "${current}" also resolves with strategy "auto".`);
-    visited.add(current);
-    for (const next of autoTargetsFor(current, comboStrategies, globalStrategy)) pending.push(next);
-  }
+
+// Policy: an Auto Router combo must target ordinary/non-auto combos. Auto Router → Auto Router
+// chaining is intentionally unsupported, so validation is a direct per-target check, not a graph
+// traversal. The per-request WeakMap guard in routeAutoCombo remains defense-in-depth.
+function validateAutoTarget(comboName, target, comboStrategies, globalStrategy, knownCombos, label = "Auto Router") {
+  const described = `${label} target "${target}"`;
+  if (knownCombos && !knownCombos.has(target)) throw new Error(`${described} does not exist.`);
+  if (target === comboName) throw new Error(`recursion blocked: ${described} is the Auto Router combo itself ("${comboName}"); Auto Router combos cannot route to themselves.`);
+  if (strategyFor(target, comboStrategies, globalStrategy) === "auto") throw new Error(`recursion blocked: ${described} is configured with fallbackStrategy "auto"; Auto Router → Auto Router chaining is not supported.`);
 }
 
 function selectRoute(body, comboName, { env = process.env, comboStrategies = {}, globalStrategy = "fallback", knownCombos } = {}) {
   const persisted = comboStrategies?.[comboName]?.autoRouter;
   const config = getConfig(env, persisted), classification = classifyTaskComplexity(body, config);
   const target = classification.level === "easy" ? config.easyTarget : config.hardTarget;
-  if (!target) throw new Error(`AUTO-ROUTER target is empty for combo "${comboName}". Configure Easy target and Hard target in the combo's Auto Router settings.`);
-  validateAutoTarget(comboName, target, comboStrategies, globalStrategy, knownCombos ? new Set(knownCombos) : null);
+  if (!target) throw new Error(`target is empty for combo "${comboName}". Configure Easy target and Hard target in the combo's Auto Router settings.`);
+  validateAutoTarget(comboName, target, comboStrategies, globalStrategy, knownCombos ? new Set(knownCombos) : null, classification.level === "easy" ? "Easy" : "Hard");
   return { target, classification, config };
 }
 
-function errorResponse(message) { return new Response(JSON.stringify({ error: { message } }), { status: 400, headers: { "Content-Type": "application/json" } }); }
+function errorResponse(message) { return new Response(JSON.stringify({ error: { message: `AUTO-ROUTER: ${message}` } }), { status: 400, headers: { "Content-Type": "application/json" } }); }
 async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy, log, delegate, targetExists }) {
   const active = body && typeof body === "object" ? activeAutoCombos.get(body) : null;
   if (active?.has(comboName)) {
-    const message = `AUTO-ROUTER recursion blocked: combo "${comboName}" was reached again while resolving this request.`;
+    const message = `recursion blocked: combo "${comboName}" was reached again while resolving this request.`;
     log.warn("AUTO-ROUTER", message);
     return errorResponse(message);
   }
@@ -212,11 +238,11 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
     return await delegate(body, target);
   } catch (error) {
     log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`);
-    return errorResponse(`AUTO-ROUTER: ${error.message}`);
+    return errorResponse(error.message);
   } finally {
     nextActive.delete(comboName);
     if (nextActive.size === 0 && body && typeof body === "object") activeAutoCombos.delete(body);
   }
 }
 
-module.exports = { DEFAULTS, HARD_TERMS, STRONG_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget };
+module.exports = { DEFAULTS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget };

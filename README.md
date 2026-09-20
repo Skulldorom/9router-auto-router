@@ -40,21 +40,23 @@ coder-auto
    └── hard ──► coder-high ► Terra High
 ```
 
-Nested combos retain their upstream behavior:
+Nested combos retain their upstream behavior, but Auto Router chaining is intentionally not supported:
 
 ```
 coder-auto
     │
     ├── easy
-    │    └── coder
+    │    └── coder                     (ordinary combo; may use fallback/round-robin)
     │         ├── Luna High
     │         └── existing fallback(s)
     │
     └── hard
-         └── coder-high
+         └── coder-high                (ordinary combo; may use fallback/round-robin)
               ├── Terra High
               └── existing fallback(s)
 ```
+
+An Auto Router target must be an ordinary (non-`auto`) combo. Auto Router → Auto Router chaining is intentionally unsupported: an easy/hard target that the same Auto Router combo, or one whose `fallbackStrategy` is `auto`, is rejected with a controlled `400` before delegation. A per-request re-entry guard remains as defense-in-depth, but correctness does not depend on request object identity surviving delegation.
 
 `coder`, `coder-high`, providers, accounts, quotas, capability adapters, fallback chains, SSE, request bodies, tools, and streaming remain owned by 9Router. Auto does not fan out, invoke a judge, persist requests, log prompts, call an LLM, or know provider/model names.
 
@@ -78,7 +80,7 @@ The current upstream UI has a compact serialized combo strategy list in one serv
 
 Create ordinary `coder` and `coder-high` combos first. Configure their existing fallback/round-robin chains normally. Create `coder-auto` with a non-empty placeholder model list if required by the upstream combo editor; its placeholder members are never executed once its strategy is `auto`.
 
-Select **Auto Router** in the normal Combo strategy selector. The editor exposes labeled **Easy target** and **Hard target** selectors, plus **Advanced** controls for **Hard threshold**, **Long context threshold (characters)**, **Large tool-result threshold (characters)**, **Many-tools threshold**, and **Verbose logging**. Do not configure `coder` or `coder-high` as `auto`, and never target `coder-auto`. Direct and target-Auto-Router cycles return `400` before delegation; per-request re-entry remains a defense-in-depth `400`. Stale configured targets return a clear Auto Router configuration error whenever target existence is available at the routing boundary. Ordinary fallback and Round Robin targets remain valid.
+Select **Auto Router** in the normal Combo strategy selector. The editor exposes labeled **Easy target** and **Hard target** selectors, plus **Advanced** controls for **Hard threshold**, **Long context threshold (characters)**, **Large tool-result threshold (characters)**, **Many-tools threshold**, and **Verbose logging**. Easy and Hard targets must be ordinary (non-`auto`) combos. A target equal to the Auto Router combo itself, or configured with `fallbackStrategy: "auto"`, is rejected with a controlled `400` before delegation; Auto Router → Auto Router chaining is intentionally unsupported. A per-request re-entry guard remains as defense-in-depth. Stale configured targets return a clear Auto Router configuration error whenever target existence is available at the routing boundary. Ordinary fallback and Round Robin targets remain valid.
 
 ### Legacy environment compatibility
 
@@ -92,7 +94,9 @@ Classification is local and deterministic. It logs route, level, bounded score, 
 
 Available tools are deliberately weak evidence. OpenHands commonly supplies a normal toolset for trivial requests, so a realistic set plus `Rename this variable in src/foo.js` remains **easy → coder**. Tool count alone cannot reach the default hard threshold.
 
-Actual work history is stronger evidence: repeated tool calls/results, substantial tool output, long message history, and large accumulated context add materially more. One image or small attachment adds only a small complexity signal; 9Router's unchanged capability routing remains responsible for vision/file requirements. Keyword groups are deduplicated and score-capped. Semantic scoring reads current user task content, with weak earlier-user context only; system prompts, assistant output, and tool output cannot independently make a request hard. Structural history signals still apply. Editing a label named `Security Settings` remains easy while `fully audit this concurrency race condition` reports useful reasons such as `audit,concurrency`.
+Actual work history is stronger evidence: repeated tool calls/results, substantial tool output, long message history, and large accumulated context add materially more. One image or small attachment adds only a small complexity signal; 9Router's unchanged capability routing remains responsible for vision/file requirements.
+
+Semantic scoring reads current user task content, with weak earlier-user context only; system prompts, assistant output, and tool output cannot independently make a request hard. Structural history signals still apply. Strong task phrases (`fully audit`, `deep review`, `race condition`, `root cause`, `financial precision`, `performance investigation`, `debug intermittent`, `intermittent failing tests`, `failing tests with unclear cause`, `repository-wide`, `multi-file`) carry substantial weight. Generic domain nouns (`security`, `authentication`, `permissions`, `architecture`, `migration`) are treated as weak, label-prone terms: they only contribute when the same user text also carries a task-oriented action word, so editing a label named `Authentication` or `Permissions`, or renaming `Architecture to System Design`, remains easy, while `fully audit the authentication and permissions implementation` and `plan a database migration` still route hard. Classification is deterministic and never serializes the whole request; it traverses structured `messages`, Responses-style `input`, and Anthropic-style `contents` while tolerating circular values and hostile getters/`toJSON()`.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -207,4 +211,4 @@ Compatibility errors report the image, candidate count/files, expected semantic 
 
 The compiled-runtime patcher discovers assets by semantic anchors and data-flow characteristics rather than fixed minified names where practical, but a few bindings must remain structurally strict. When discovery cannot match exactly one candidate, or cannot prove the required surrounding bindings, it fails closed rather than patching an uncertain location. The runtime resolver alias is read from its own call site and captured before any later inner rebinding, so harmless minifier renaming is handled; the dispatch delegate is likewise reconstructed from the discovered `handleSingleModel` call. UI candidate shape, the strategy selector anchor, and the exact persisted-binding positions are still matched by data flow, so an ambiguous or restructured asset stops the build instead of patching wrongly.
 
-No runtime dependencies are added. `package.json` version `0.1.0` is private-package metadata, not a production release identity; production images rely on immutable source/upstream tags and labels. Tests cover deterministic classification, realistic sanitized OpenHands fixtures, history reclassification, bounded keyword scoring, modality weighting, one-route/no-fan-out selection, body/tools/stream preservation, nested delegation, recursion protection, per-field precedence, server/client UI semantic fixtures, labels, empty-self target filtering, semantic discovery, zero/multiple/ambiguous candidate failures, idempotence, compatibility checks, Docker build, smoke tests, runtime responses, authenticated `/api/settings` persistence across a restart, and a patched-container HTTP-path test. The HTTP test boots the patched container with a deterministic local OpenAI-compatible mock provider, sends easy and hard OpenAI-compatible requests through the normal `/api/v1/chat/completions` path, and proves the patched auto strategy selects exactly one normal target combo, preserves body/stream/tools into delegation, executes the selected combo through normal 9Router handling, and fails closed with a controlled error for stale targets and target cycles.
+No runtime dependencies are added. `package.json` version `0.1.0` is private-package metadata, not a production release identity; production images rely on immutable source/upstream tags and labels. Tests cover deterministic classification, realistic sanitized OpenHands fixtures, history reclassification, bounded keyword scoring, weak-domain false-positive regressions, modality weighting, one-route/no-fan-out selection, body/tools/stream preservation, ordinary-target delegation, explicit self/auto/stale target rejection, defense-in-depth recursion protection, per-field precedence, server/client UI semantic fixtures, labels, empty-self target filtering, semantic discovery, zero/multiple/ambiguous candidate failures, idempotence, compatibility checks, Docker build, smoke tests, runtime responses, authenticated `/api/settings` persistence across a restart, and a patched-container HTTP-path test. The HTTP test boots the patched container with a deterministic local OpenAI-compatible mock provider, sends easy and hard OpenAI-compatible requests through the normal `/api/v1/chat/completions` path, and proves the patched auto strategy selects exactly one normal target combo, preserves body/stream/tools into delegation, executes the selected combo through normal 9Router handling, and fails closed with a controlled error for missing targets, self-targets, and Auto Router → Auto Router targets.
