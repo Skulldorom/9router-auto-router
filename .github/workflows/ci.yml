@@ -1,0 +1,26 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      upstream_image:
+        description: Upstream 9Router image to validate
+        required: false
+        default: decolua/9router:0.5.75
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_IMAGE: ${{ inputs.upstream_image || 'decolua/9router:0.5.75' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run check
+      - run: npm test
+      - run: ./scripts/check-upstream-compatibility.sh
+      - run: docker build --build-arg UPSTREAM_IMAGE="$UPSTREAM_IMAGE" -t 9router-auto-router:ci .
+      - run: ./scripts/smoke-test.sh 9router-auto-router:ci

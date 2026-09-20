@@ -1,0 +1,17 @@
+services:
+  9router:
+    build:
+      context: ..
+      args:
+        UPSTREAM_IMAGE: decolua/9router:0.5.75
+    image: 9router-auto-router:0.5.75
+    container_name: 9router
+    restart: unless-stopped
+    ports:
+      - "20128:20128"
+    volumes:
+      - ./data:/app/data
+    environment:
+      DATA_DIR: /app/data
+      AUTO_ROUTER_EASY_TARGET: coder
+      AUTO_ROUTER_HARD_TARGET: coder-high
