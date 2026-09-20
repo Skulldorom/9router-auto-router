@@ -1,6 +1,33 @@
 # 9Router Auto Router
 
-Small Docker overlay for [decolua/9router](https://github.com/decolua/9router). It is **not a 9Router fork**. It adds a local deterministic `auto` combo strategy that chooses exactly one normal 9Router target before generation.
+Small Docker overlay for [decolua/9router](https://github.com/decolua/9router). It remains a drop-in 9Router image: Auto Router chooses exactly one normal 9Router combo, then delegates execution back to 9Router.
+
+## UI-first setup
+
+Use `ghcr.io/skulldorom/9router-auto-router:latest` and preserve the existing `/app/data` volume. Open the normal 9Router UI, open **Combos**, create or edit a combo, choose **Auto Router**, select **Easy target** and **Hard target**, optionally expand **Advanced**, and save. No `AUTO_ROUTER_*` variables are required.
+
+The normal Compose example contains only the custom image and normal 9Router persistence. Target combos retain their existing fallback or Round Robin behavior.
+
+```json
+{
+  "comboStrategies": {
+    "coder-auto": {
+      "fallbackStrategy": "auto",
+      "autoRouter": {
+        "easyTarget": "coder",
+        "hardTarget": "coder-high",
+        "hardThreshold": 6,
+        "longContextChars": 24000,
+        "largeToolResultChars": 12000,
+        "manyTools": 16,
+        "verbose": false
+      }
+    }
+  }
+}
+```
+
+The existing `/api/settings` and `/app/data` path persists this per-combo structure. Precedence is explicit `comboStrategies[comboName].autoRouter` field, then the matching legacy `AUTO_ROUTER_*` environment variable, then the built-in default. Legacy environment-only deployments continue to work.
 
 ```
 OpenHands
@@ -45,23 +72,17 @@ The overlay dynamically discovers the single runtime handler under `/app/.next/s
 
 It then requires exactly two distinct Fusion dispatches and validates nearby `body`, combo-strategy, and settings bindings before adding guarded `auto` branches. Both branches delegate back into the original 9Router handler, so `coder` and `coder-high` run their normal fallback logic. Discovery returns zero or multiple candidates, missing anchors, unexpected bindings, or patch-integrity failures as build failures. The checker and patcher execute the same discovery code.
 
-The current upstream UI has a compact serialized combo strategy list in one server and one client asset. The overlay validates both assets using the `Fallback`, `Round Robin`, and `Fusion` labels, then adds **Auto — select one target**. If that exact structure changes, the build fails closed instead of modifying an uncertain asset. Upstream entrypoint, command, data mounts, user handling, and persistent data are unchanged.
+The current upstream UI has a compact serialized combo strategy list in one server and one client asset. The overlay validates both assets using the `Fallback`, `Round Robin`, and `Fusion` labels, then adds **Auto Router**, per-combo target selectors, and Advanced controls. If that exact structure changes, the build fails closed instead of modifying an uncertain asset. Upstream entrypoint, command, data mounts, user handling, and persistent data are unchanged.
 
 ## Configure 9Router
 
-Create ordinary `coder` and `coder-high` combos first. Configure their existing fallback/round-robin chains normally. Create `coder-auto` with a non-empty placeholder model list because 9Router recognizes combos only when they have models. Its placeholder members are never executed once its strategy is `auto`.
+Create ordinary `coder` and `coder-high` combos first. Configure their existing fallback/round-robin chains normally. Create `coder-auto` with a non-empty placeholder model list if required by the upstream combo editor; its placeholder members are never executed once its strategy is `auto`.
 
-The combo UI exposes **Strategy: Auto — select one target** after the overlay is built. Select it for `coder-auto`. Equivalent settings JSON is:
+Select **Auto Router** in the normal Combo strategy selector. The editor then exposes Easy target, Hard target, and Advanced settings. Do not configure `coder` or `coder-high` as `auto`, and never target `coder-auto`. Direct, target, and per-request re-entry cycles return `400` instead of recursing.
 
-```json
-{
-  "comboStrategies": {
-    "coder-auto": { "fallbackStrategy": "auto" }
-  }
-}
-```
+### Legacy environment compatibility
 
-Do not configure `coder` or `coder-high` as `auto`, and never target `coder-auto`. Direct, target, and per-request re-entry cycles return `400` instead of recursing.
+Existing deployments may retain `AUTO_ROUTER_*` variables. They are optional compatibility fallbacks, not the normal setup path. Per-combo UI fields take precedence over environment values, and missing fields use the built-in defaults listed below.
 
 Point OpenHands at the standard 9Router OpenAI-compatible endpoint with `model = coder-auto`. Classification is stateless and reads the request's supplied Chat `messages`, Responses `input`, or translated `contents`; a later `continue` can therefore use the supplied earlier history.
 
@@ -105,7 +126,6 @@ docker build --build-arg UPSTREAM_IMAGE=decolua/9router:0.5.75 -t 9router-auto-r
 ```sh
 docker run -d --name 9router -p 20128:20128 \
   -v "$HOME/.9router:/app/data" -e DATA_DIR=/app/data \
-  -e AUTO_ROUTER_EASY_TARGET=coder -e AUTO_ROUTER_HARD_TARGET=coder-high \
   9router-auto-router:0.5.75
 ```
 

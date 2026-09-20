@@ -3,10 +3,10 @@ import path from "node:path";
 
 const appRoot = process.argv[2] || "/app";
 const checkOnly = process.argv.includes("--check");
-const runtimeMarker = "9router-auto-router:v2";
-const uiMarker = "9router-auto-router-ui:v1";
+const runtimeMarker = "9router-auto-router:v3";
+const uiMarker = "9router-auto-router-ui:v2";
 const UI_ANCHOR = '"fusion",label:"Fusion — panel + judge"';
-const UI_PATCH = '"fusion",label:"Fusion — panel + judge"},{value:"auto",label:"Auto — select one target"';
+const UI_PATCH = '"fusion",label:"Fusion — panel + judge"},{value:"auto",label:"Auto Router"';
 
 function count(source, needle) { return source.split(needle).length - 1; }
 function walk(dir) {
@@ -75,10 +75,50 @@ function patchUi(targets) {
   let changed = false;
   for (const target of targets) {
     let source = fs.readFileSync(target, "utf8");
-    if (source.includes(uiMarker)) continue;
+    if (source.includes(uiMarker)) {
+      if (count(source, uiMarker) !== 1 || !source.includes('label:"Auto Router"') || !source.includes("autoRouter")) fail(`Patched UI integrity failed:\n  ${path.relative(appRoot, target)}`);
+      continue;
+    }
     if (count(source, UI_ANCHOR) !== 1) fail(`UI strategy anchor is not unique:\n  ${path.relative(appRoot, target)}`);
+    const isServer = source.includes('function bJ({combo:a,getCaps:b,activeProviders:c=[],copied:d,onCopy:e,onEdit:f,onDelete:g,strategy:h={},onSetStrategy:i})');
+    const isClient = source.includes('function g({combo:e,getCaps:t,activeProviders:s=[],copied:i,onCopy:n,onEdit:r,onDelete:o,strategy:c={},onSetStrategy:m})');
+    if (isServer === isClient) fail(`Combo UI semantic candidate is ambiguous:\n  ${path.relative(appRoot, target)}`);
+    const spec = isServer ? {
+      component: 'function bJ({combo:a,getCaps:b,activeProviders:c=[],copied:d,onCopy:e,onEdit:f,onDelete:g,strategy:h={},onSetStrategy:i})',
+      componentPatched: 'function bJ({combo:a,getCaps:b,activeProviders:c=[],copied:d,onCopy:e,onEdit:f,onDelete:g,strategy:h={},onSetStrategy:i,availableCombos:q=[]})',
+      call: 'strategy:k[a.name]||{},onSetStrategy:b=>A(a.name,b)',
+      callPatched: 'availableCombos:a.map(a=>a.name),strategy:k[a.name]||{},onSetStrategy:b=>A(a.name,b)',
+      state: 'let[j,k]=(0,x.useState)(!1),l=h.fallbackStrategy||"fallback",m=h.judgeModel||"";',
+      statePatched: 'let[j,k]=(0,x.useState)(!1),l=h.fallbackStrategy||"fallback",m=h.judgeModel||"",o=h.autoRouter&&typeof h.autoRouter==="object"?h.autoRouter:{},p=(key,value)=>i({autoRouter:{...o,[key]:value}});',
+      selector: '(0,w.jsx)(bA.l6,{options:bI,value:l,onChange:a=>i({fallbackStrategy:a.target.value}),selectClassName:"py-1.5 text-xs"})',
+      level: 'l',
+      autoCard: '"auto"===l&&(0,w.jsx)("div",{className:"mt-2 text-[11px] text-text-muted",children:"Auto Router"}),',
+      jsx: 'w',
+      config: 'o', update: 'p', combo: 'a',
+      controls: '(0,w.jsxs)("div",{children:[(0,w.jsx)("select",{value:o.easyTarget||"coder",onChange:b=>p("easyTarget",b.target.value),children:q.filter(b=>b!==a.name).map(b=>(0,w.jsx)("option",{value:b,children:b},b))}),(0,w.jsx)("select",{value:o.hardTarget||"coder-high",onChange:b=>p("hardTarget",b.target.value),children:q.filter(b=>b!==a.name).map(b=>(0,w.jsx)("option",{value:b,children:b},b))}),(0,w.jsx)("details",{children:[(0,w.jsx)("summary",{children:"Advanced"}),(0,w.jsx)("input",{type:"number",min:1,value:o.hardThreshold||6,onChange:b=>{const c=Number(b.target.value);if(Number.isSafeInteger(c)&&c>0)p("hardThreshold",c)}}),(0,w.jsx)("input",{type:"number",min:1,value:o.longContextChars||24000,onChange:b=>{const c=Number(b.target.value);if(Number.isSafeInteger(c)&&c>0)p("longContextChars",c)}}),(0,w.jsx)("input",{type:"number",min:1,value:o.largeToolResultChars||12000,onChange:b=>{const c=Number(b.target.value);if(Number.isSafeInteger(c)&&c>0)p("largeToolResultChars",c)}}),(0,w.jsx)("input",{type:"number",min:1,value:o.manyTools||16,onChange:b=>{const c=Number(b.target.value);if(Number.isSafeInteger(c)&&c>0)p("manyTools",c)}}),(0,w.jsx)("input",{type:"checkbox",checked:!!o.verbose,onChange:b=>p("verbose",b.target.checked)})]})]})',
+    } : {
+      component: 'function g({combo:e,getCaps:t,activeProviders:s=[],copied:i,onCopy:n,onEdit:r,onDelete:o,strategy:c={},onSetStrategy:m})',
+      componentPatched: 'function g({combo:e,getCaps:t,activeProviders:s=[],copied:i,onCopy:n,onEdit:r,onDelete:o,strategy:c={},onSetStrategy:m,availableCombos:q=[]})',
+      call: 'strategy:y[e.name]||{},onSetStrategy:t=>_(e.name,t)',
+      callPatched: 'availableCombos:e.map(e=>e.name),strategy:y[e.name]||{},onSetStrategy:t=>_(e.name,t)',
+      state: 'let[x,p]=(0,a.useState)(!1),u=c.fallbackStrategy||"fallback",h=c.judgeModel||"";',
+      statePatched: 'let[x,p]=(0,a.useState)(!1),u=c.fallbackStrategy||"fallback",h=c.judgeModel||"",v=c.autoRouter&&typeof c.autoRouter==="object"?c.autoRouter:{},A=(key,value)=>m({autoRouter:{...v,[key]:value}});',
+      selector: '(0,l.jsx)(d.l6,{options:f,value:u,onChange:e=>m({fallbackStrategy:e.target.value}),selectClassName:"py-1.5 text-xs"})',
+      level: 'u',
+      autoCard: '"auto"===u&&(0,l.jsx)("div",{className:"mt-2 text-[11px] text-text-muted",children:"Auto Router"}),',
+      jsx: 'l',
+      config: 'v', update: 'A', combo: 'e',
+      controls: '(0,l.jsxs)("div",{children:[(0,l.jsx)("select",{value:v.easyTarget||"coder",onChange:t=>A("easyTarget",t.target.value),children:q.filter(t=>t!==e.name).map(t=>(0,l.jsx)("option",{value:t,children:t},t))}),(0,l.jsx)("select",{value:v.hardTarget||"coder-high",onChange:t=>A("hardTarget",t.target.value),children:q.filter(t=>t!==e.name).map(t=>(0,l.jsx)("option",{value:t,children:t},t))}),(0,l.jsx)("details",{children:[(0,l.jsx)("summary",{children:"Advanced"}),(0,l.jsx)("input",{type:"number",min:1,value:v.hardThreshold||6,onChange:t=>{const s=Number(t.target.value);if(Number.isSafeInteger(s)&&s>0)A("hardThreshold",s)}}),(0,l.jsx)("input",{type:"number",min:1,value:v.longContextChars||24000,onChange:t=>{const s=Number(t.target.value);if(Number.isSafeInteger(s)&&s>0)A("longContextChars",s)}}),(0,l.jsx)("input",{type:"number",min:1,value:v.largeToolResultChars||12000,onChange:t=>{const s=Number(t.target.value);if(Number.isSafeInteger(s)&&s>0)A("largeToolResultChars",s)}}),(0,l.jsx)("input",{type:"number",min:1,value:v.manyTools||16,onChange:t=>{const s=Number(t.target.value);if(Number.isSafeInteger(s)&&s>0)A("manyTools",s)}}),(0,l.jsx)("input",{type:"checkbox",checked:!!v.verbose,onChange:t=>A("verbose",t.target.checked)})]})]})',
+    };
+    for (const [name, value] of [["component", spec.component], ["call", spec.call], ["state", spec.state], ["selector", spec.selector]]) if (count(source, value) !== 1) fail(`Auto Router UI semantic anchor is not unique (${name}):\n  ${path.relative(appRoot, target)}`);
+    source = source.replace(spec.component, spec.componentPatched).replace(spec.call, spec.callPatched).replace(spec.state, spec.statePatched);
+    const rendered = `(0,${spec.jsx}.jsxs)("div",{children:[${spec.selector},"auto"===${spec.level}&&${spec.controls}]})`;
+    source = source.replace(spec.selector, rendered);
+    const card = `"fusion"===${spec.level}&&`;
+    if (count(source, card) !== 1) fail(`Auto Router card label anchor is not unique:\n  ${path.relative(appRoot, target)}`);
+    source = source.replace(card, `${spec.autoCard}${card}`);
     source = source.replace(UI_ANCHOR, `${UI_PATCH}/* ${uiMarker} */`);
-    if (count(source, uiMarker) !== 1) fail(`UI patch integrity failed:\n  ${path.relative(appRoot, target)}`);
+    if (count(source, uiMarker) !== 1 || !source.includes('label:"Auto Router"') || !source.includes("autoRouter") || !source.includes("availableCombos:")) fail(`UI patch integrity failed:\n  ${path.relative(appRoot, target)}`);
     fs.writeFileSync(target, source);
     changed = true;
   }

@@ -77,3 +77,38 @@ test("auto chooses one route, preserves original body/tools/stream, and delegate
   const response = await routeAutoCombo({ body, comboName: "coder-auto", comboStrategies: { coder: { fallbackStrategy: "fallback" }, "coder-high": { fallbackStrategy: "round-robin" } }, log: { info() {}, warn() {} }, delegate: (sent, target) => { calls.push({ sent, target }); return new Response(target === "coder" ? "nested fallback retained" : "unexpected"); } });
   assert.equal(response.status, 200); assert.equal(calls.length, 1); assert.equal(calls[0].target, "coder"); assert.equal(calls[0].sent, body); assert.equal(calls[0].sent.stream, true); assert.equal(calls[0].sent.tools, body.tools); assert.equal(await response.text(), "nested fallback retained");
 });
+
+test("per-combo persisted configuration overrides legacy environment and defaults", () => {
+  const body = message("fully audit this");
+  const comboStrategies = {
+    "coder-auto": { fallbackStrategy: "auto", autoRouter: { easyTarget: "ui-easy", hardTarget: "ui-hard", hardThreshold: 1, verbose: false } },
+  };
+  const result = selectRoute(body, "coder-auto", {
+    env: { AUTO_ROUTER_EASY_TARGET: "env-easy", AUTO_ROUTER_HARD_TARGET: "env-hard", AUTO_ROUTER_HARD_THRESHOLD: "99", AUTO_ROUTER_VERBOSE: "true" },
+    comboStrategies,
+  });
+  assert.equal(result.target, "ui-hard");
+  assert.equal(result.config.easyTarget, "ui-easy");
+  assert.equal(result.config.verbose, false);
+  assert.equal(result.config.longContextChars, 24000);
+});
+
+test("two Auto Router combos keep independent targets and thresholds", () => {
+  const easy = message("hello"), hard = message("fully audit this");
+  const comboStrategies = {
+    first: { fallbackStrategy: "auto", autoRouter: { easyTarget: "cheap", hardTarget: "deep", hardThreshold: 6 } },
+    second: { fallbackStrategy: "auto", autoRouter: { easyTarget: "fast", hardTarget: "smart", hardThreshold: 1 } },
+  };
+  assert.equal(selectRoute(easy, "first", { comboStrategies }).target, "cheap");
+  assert.equal(selectRoute(hard, "second", { comboStrategies }).target, "smart");
+  assert.equal(selectRoute(hard, "first", { comboStrategies }).target, "deep");
+});
+
+test("invalid explicit numeric values fail safely to built-in defaults", () => {
+  const result = selectRoute(message("hello"), "coder-auto", {
+    env: { AUTO_ROUTER_HARD_THRESHOLD: "2" },
+    comboStrategies: { "coder-auto": { autoRouter: { hardThreshold: -1, longContextChars: "bad" } } },
+  });
+  assert.equal(result.config.hardThreshold, 6);
+  assert.equal(result.config.longContextChars, 24000);
+});

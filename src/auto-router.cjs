@@ -19,15 +19,27 @@ function positiveInt(value, fallback) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function getConfig(env = process.env) {
+function configuredString(explicit, key, legacy, fallback) {
+  if (Object.prototype.hasOwnProperty.call(explicit, key)) return typeof explicit[key] === "string" && explicit[key].trim() ? explicit[key].trim() : fallback;
+  if (typeof legacy === "string" && legacy.trim()) return legacy.trim();
+  return fallback;
+}
+
+function configuredPositiveInt(explicit, key, legacy, fallback) {
+  if (Object.prototype.hasOwnProperty.call(explicit, key)) return Number.isSafeInteger(explicit[key]) && explicit[key] > 0 ? explicit[key] : fallback;
+  return positiveInt(legacy, fallback);
+}
+
+function getConfig(env = process.env, explicit = {}) {
+  const selected = explicit && typeof explicit === "object" && !Array.isArray(explicit) ? explicit : {};
   return {
-    easyTarget: String(env.AUTO_ROUTER_EASY_TARGET || DEFAULTS.easyTarget).trim(),
-    hardTarget: String(env.AUTO_ROUTER_HARD_TARGET || DEFAULTS.hardTarget).trim(),
-    hardThreshold: positiveInt(env.AUTO_ROUTER_HARD_THRESHOLD, DEFAULTS.hardThreshold),
-    longContextChars: positiveInt(env.AUTO_ROUTER_LONG_CONTEXT_CHARS, DEFAULTS.longContextChars),
-    largeToolResultChars: positiveInt(env.AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS, DEFAULTS.largeToolResultChars),
-    manyTools: positiveInt(env.AUTO_ROUTER_MANY_TOOLS, DEFAULTS.manyTools),
-    verbose: env.AUTO_ROUTER_VERBOSE === "true",
+    easyTarget: configuredString(selected, "easyTarget", env.AUTO_ROUTER_EASY_TARGET, DEFAULTS.easyTarget),
+    hardTarget: configuredString(selected, "hardTarget", env.AUTO_ROUTER_HARD_TARGET, DEFAULTS.hardTarget),
+    hardThreshold: configuredPositiveInt(selected, "hardThreshold", env.AUTO_ROUTER_HARD_THRESHOLD, DEFAULTS.hardThreshold),
+    longContextChars: configuredPositiveInt(selected, "longContextChars", env.AUTO_ROUTER_LONG_CONTEXT_CHARS, DEFAULTS.longContextChars),
+    largeToolResultChars: configuredPositiveInt(selected, "largeToolResultChars", env.AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS, DEFAULTS.largeToolResultChars),
+    manyTools: configuredPositiveInt(selected, "manyTools", env.AUTO_ROUTER_MANY_TOOLS, DEFAULTS.manyTools),
+    verbose: Object.prototype.hasOwnProperty.call(selected, "verbose") ? selected.verbose === true : env.AUTO_ROUTER_VERBOSE === "true",
   };
 }
 
@@ -103,7 +115,8 @@ function classifyTaskComplexity(body, config = getConfig()) {
 }
 
 function selectRoute(body, comboName, { env = process.env, comboStrategies = {}, globalStrategy = "fallback" } = {}) {
-  const config = getConfig(env), classification = classifyTaskComplexity(body, config);
+  const persisted = comboStrategies?.[comboName]?.autoRouter;
+  const config = getConfig(env, persisted), classification = classifyTaskComplexity(body, config);
   const target = classification.level === "easy" ? config.easyTarget : config.hardTarget;
   if (!target) throw new Error("AUTO-ROUTER target is empty. Set AUTO_ROUTER_EASY_TARGET and AUTO_ROUTER_HARD_TARGET.");
   if (target === comboName) throw new Error(`AUTO-ROUTER recursion blocked: combo "${comboName}" targets itself.`);
