@@ -6,6 +6,8 @@ NAME="9router-auto-router-settings-$$"
 DATA_DIR=$(mktemp -d)
 COOKIE_JAR="$DATA_DIR/cookies.txt"
 PASSWORD="auto-router-integration-password"
+OWNER_UID=$(id -u)
+OWNER_GID=$(id -g)
 
 cleanup() {
   status=$?
@@ -13,7 +15,7 @@ cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   if [ -d "$DATA_DIR" ] && ! rmdir "$DATA_DIR" 2>/dev/null; then
     docker run --rm --user 0:0 --entrypoint /bin/sh -v "$DATA_DIR:/cleanup" "$IMAGE" \
-      -c 'find /cleanup -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +' || true
+      -c 'find /cleanup -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; chown "$1:$2" /cleanup' -- "$OWNER_UID" "$OWNER_GID" || true
     if ! rmdir "$DATA_DIR"; then
       echo "Settings persistence test cleanup failed: could not remove $DATA_DIR." >&2
       [ "$status" -ne 0 ] && exit "$status"
