@@ -1,6 +1,6 @@
 # 9Router Auto Router
 
-Small Docker overlay for [decolua/9router](https://github.com/decolua/9router). It is **not a 9Router fork**. It adds a local deterministic `auto` combo strategy that selects one normal 9Router route before generation.
+Small Docker overlay for [decolua/9router](https://github.com/decolua/9router). It is **not a 9Router fork**. It adds a local deterministic `auto` combo strategy that chooses exactly one normal 9Router target before generation.
 
 ```
 OpenHands
@@ -13,31 +13,45 @@ coder-auto
    └── hard ──► coder-high ► Terra High
 ```
 
-`coder` and `coder-high` remain ordinary 9Router models/combos. This overlay never stores credentials, knows provider names, calls Luna/Terra, changes data, or replaces 9Router fallback/account/SSE/capability logic.
+Nested combos retain their upstream behavior:
 
-## Auto vs Fusion
+```
+coder-auto
+    │
+    ├── easy
+    │    └── coder
+    │         ├── Luna High
+    │         └── existing fallback(s)
+    │
+    └── hard
+         └── coder-high
+              ├── Terra High
+              └── existing fallback(s)
+```
 
-Fusion fans out to multiple panel models and has a judge synthesize their answers. `auto` classifies **before** generation and invokes exactly one selected target. The target then runs its normal 9Router combo fallback chain. Tools, streaming, input bodies, and upstream capability routing are passed through unchanged.
+`coder`, `coder-high`, providers, accounts, quotas, capability adapters, fallback chains, SSE, request bodies, tools, and streaming remain owned by 9Router. Auto does not fan out, invoke a judge, persist requests, log prompts, call an LLM, or know provider/model names.
 
 ## Current upstream integration
 
-Validated against `decolua/9router:0.5.75` (upstream source commit `a8c9d3802c5933500fba95416f5bf0c130581396`, source version 0.5.81 on 2026-09-18; Docker Hub's newest published pin at implementation time is 0.5.75).
+Inspected upstream default branch commit `a8c9d3802c5933500fba95416f5bf0c130581396` and published `decolua/9router:0.5.75` / `latest` image digest `sha256:7c893bc2c27ecea2ae337abd5eacfec9e5763091b3a3b7862fc0625b770bb156`. The production server uses the compiled Next standalone assets; `/app/open-sse/services/combo.js` is not imported by that runtime copy, so changing it would not affect requests.
 
-Upstream's production image is a Next standalone build. The source integration design is `src/sse/handlers/chat.js`: it obtains `settings.comboStrategies[combo].fallbackStrategy`, calls Fusion only when it equals `fusion`, otherwise calls `handleComboChat`. `open-sse/services/combo.js` supplies `handleComboChat`, `getRotatedModels`, `detectRequiredCapabilities`, and `reorderByCapabilities`; `accountFallback.js` owns fallback error semantics. The runtime equivalent is compiled in `/app/.next/server/chunks/8635.js`, with the combo service retained at `/app/open-sse/services/combo.js`.
+The overlay dynamically discovers the single runtime handler under `/app/.next/server`, rather than assuming a chunk name. It requires exactly one file containing all of these semantic anchors:
 
-The overlay copies one owned module to `/opt/9router-auto-router/auto-router.cjs`, then applies three small guarded edits to the compiled chat chunk:
+- `comboStrategies`
+- `strategy: fusion`
+- `Combo "`
+- `handleSingleModel`
+- `comboStickyRoundRobinLimit`
 
-1. require the owned module;
-2. add `strategy === "auto"` in the public combo dispatch;
-3. add the same branch in recursive combo dispatch, so a selected normal combo follows normal fallback.
+It then requires exactly two distinct Fusion dispatches and validates nearby `body`, combo-strategy, and settings bindings before adding guarded `auto` branches. Both branches delegate back into the original 9Router handler, so `coder` and `coder-high` run their normal fallback logic. Discovery returns zero or multiple candidates, missing anchors, unexpected bindings, or patch-integrity failures as build failures. The checker and patcher execute the same discovery code.
 
-Every anchor must occur exactly once. Changed/missing/ambiguous anchors fail the Docker build. The patch marker is idempotent; a second run detects it and does not duplicate code. Upstream `ENTRYPOINT ["/entrypoint.sh"]`, `CMD ["node", "custom-server.js"]`, port `20128`, `/app/data`, `/app/data-home`, user handling, and persistent data remain unchanged.
+The current upstream UI has a compact serialized combo strategy list in one server and one client asset. The overlay validates both assets using the `Fallback`, `Round Robin`, and `Fusion` labels, then adds **Auto — select one target**. If that exact structure changes, the build fails closed instead of modifying an uncertain asset. Upstream entrypoint, command, data mounts, user handling, and persistent data are unchanged.
 
 ## Configure 9Router
 
-Create normal `coder` and `coder-high` combos/models in 9Router first. Create `coder-auto` with any non-empty placeholder model list; 9Router currently recognizes a combo only when it has at least one model. Those placeholder members are never executed when `coder-auto` has `auto` strategy.
+Create ordinary `coder` and `coder-high` combos first. Configure their existing fallback/round-robin chains normally. Create `coder-auto` with a non-empty placeholder model list because 9Router recognizes combos only when they have models. Its placeholder members are never executed once its strategy is `auto`.
 
-Set the per-combo strategy through the existing settings API/UI data, for example:
+The combo UI exposes **Strategy: Auto — select one target** after the overlay is built. Select it for `coder-auto`. Equivalent settings JSON is:
 
 ```json
 {
@@ -47,58 +61,39 @@ Set the per-combo strategy through the existing settings API/UI data, for exampl
 }
 ```
 
-Do not configure `coder` or `coder-high` as `auto`; they should be normal fallback or round-robin combos. Do not target `coder-auto` from either environment variable. Direct and obvious auto-target cycles return a clear `400` instead of recursing.
+Do not configure `coder` or `coder-high` as `auto`, and never target `coder-auto`. Direct, target, and per-request re-entry cycles return `400` instead of recursing.
 
-Point OpenHands at the usual 9Router OpenAI-compatible endpoint and set `model = coder-auto`. No special session ID is assumed: classification is stateless and examines full request history, including OpenAI Chat `messages`, Responses `input`, and translated `contents`. This makes a later `continue` retain earlier tool/history signals.
+Point OpenHands at the standard 9Router OpenAI-compatible endpoint with `model = coder-auto`. Classification is stateless and reads the request's supplied Chat `messages`, Responses `input`, or translated `contents`; a later `continue` can therefore use the supplied earlier history.
 
 ## Classification
 
-The classifier is local, deterministic, and logs metadata only. It uses approximate character counts, message count, tool definitions/history/results, current request modalities, and a bounded high-signal phrase set. It does not tokenize, persist bodies, log prompt text, use an LLM, call external services, or add telemetry.
+Classification is local and deterministic. It logs route, level, bounded score, and reason labels only; request text is never logged.
 
-Defaults:
+Available tools are deliberately weak evidence. OpenHands commonly supplies a normal toolset for trivial requests, so a realistic set plus `Rename this variable in src/foo.js` remains **easy → coder**. Tool count alone cannot reach the default hard threshold.
+
+Actual work history is stronger evidence: repeated tool calls/results, substantial tool output, long message history, and large accumulated context add materially more. One image or small attachment adds only a small complexity signal; 9Router's unchanged capability routing remains responsible for vision/file requirements. Keyword groups are deduplicated and score-capped, so `fully audit this concurrency race condition` reports useful reasons such as `audit,concurrency` rather than a runaway score.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `AUTO_ROUTER_EASY_TARGET` | `coder` | Target for easy requests |
-| `AUTO_ROUTER_HARD_TARGET` | `coder-high` | Target for hard requests |
-| `AUTO_ROUTER_HARD_THRESHOLD` | `6` | Score at which a request is hard |
-| `AUTO_ROUTER_LONG_CONTEXT_CHARS` | `24000` | Large context threshold |
-| `AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS` | `12000` | Large tool-result threshold |
-| `AUTO_ROUTER_MANY_TOOLS` | `5` | Many-tool threshold |
+| `AUTO_ROUTER_EASY_TARGET` | `coder` | Easy target |
+| `AUTO_ROUTER_HARD_TARGET` | `coder-high` | Hard target |
+| `AUTO_ROUTER_HARD_THRESHOLD` | `6` | Hard score threshold |
+| `AUTO_ROUTER_LONG_CONTEXT_CHARS` | `24000` | Large-context threshold |
+| `AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS` | `12000` | Large tool-output threshold |
+| `AUTO_ROUTER_MANY_TOOLS` | `16` | Large-toolset threshold; contributes at most 1, huge sets at most 2 |
 | `AUTO_ROUTER_VERBOSE` | `false` | Emit numeric metadata, never request text |
 
-Strong terms such as `fully audit`, `migration`, `concurrency`, and `race condition` route hard. Large contexts, many tools, repeated/large tool results, and complex modalities add or independently trigger hard routing. Malformed, empty, or classifier-error requests fail safe to hard. Typical log:
+Malformed requests, empty requests, and classifier exceptions fail closed to `hard`. Legitimate sparse OpenAI-compatible requests do not.
+
+Example:
 
 ```
-AUTO-ROUTER coder-auto → coder-high level=hard score=6 reasons=short-context,no-tools,keyword:fully-audit
+AUTO-ROUTER coder-auto → coder-high level=hard score=7 reasons=tools-present,audit,concurrency
 ```
 
-No request-level override is implemented in v1. Adding a non-standard body field risks OpenAI compatibility, and header propagation would require broader upstream handler changes. Use a separate `coder` or `coder-high` model selection when an explicit override is required.
+## Build, compatibility, and deployment
 
-## Build and deploy
-
-Use a pin in production:
-
-```sh
-docker build --build-arg UPSTREAM_IMAGE=decolua/9router:0.5.75 -t 9router-auto-router:0.5.75 .
-docker run -d --name 9router -p 20128:20128 \
-  -v "$HOME/.9router:/app/data" -e DATA_DIR=/app/data \
-  -e AUTO_ROUTER_EASY_TARGET=coder -e AUTO_ROUTER_HARD_TARGET=coder-high \
-  9router-auto-router:0.5.75
-```
-
-For upstream latest, deliberately opt in and validate first:
-
-```sh
-UPSTREAM_IMAGE=decolua/9router:latest ./scripts/check-upstream-compatibility.sh
-docker build --build-arg UPSTREAM_IMAGE=decolua/9router:latest -t 9router-auto-router:latest .
-```
-
-`examples/docker-compose.yml` retains the documented upstream `/app/data` mount. Adjust ports, env files, headroom, and named volume choices to match the existing deployment rather than replacing them.
-
-## Safe upgrades, rollback, troubleshooting
-
-Upgrade sequence: pull/check candidate upstream image, run unit tests, build the overlay, run smoke test, then deploy only if all pass:
+Use a pinned image in production:
 
 ```sh
 npm run check && npm test
@@ -107,13 +102,21 @@ docker build --build-arg UPSTREAM_IMAGE=decolua/9router:0.5.75 -t 9router-auto-r
 ./scripts/smoke-test.sh 9router-auto-router:0.5.75
 ```
 
-Rollback by switching the service image back to the previously known overlay tag, or the original `decolua/9router:<known-good>` image. Both keep `/app/data` untouched.
+```sh
+docker run -d --name 9router -p 20128:20128 \
+  -v "$HOME/.9router:/app/data" -e DATA_DIR=/app/data \
+  -e AUTO_ROUTER_EASY_TARGET=coder -e AUTO_ROUTER_HARD_TARGET=coder-high \
+  9router-auto-router:0.5.75
+```
 
-- **Build fails with compatibility check:** upstream's compiled handler changed. Do not force the patch; review the current upstream integration points and update guarded anchors/tests.
-- **`AUTO-ROUTER recursion blocked`:** target points at the auto combo, or a target is configured as `auto`. Restore normal target combo strategies.
-- **Auto does not activate:** verify `coder-auto` exists as a non-empty combo and `comboStrategies.coder-auto.fallbackStrategy` is exactly `auto`.
-- **Capability/tool issue:** target combos still use upstream routing. Check their model capability settings and normal 9Router logs; Auto never strips tools or bypasses `detectRequiredCapabilities`.
+`latest` is checked in CI as a non-blocking compatibility signal. Test it deliberately before deployment:
+
+```sh
+UPSTREAM_IMAGE=decolua/9router:latest ./scripts/check-upstream-compatibility.sh
+```
+
+Compatibility errors report the image, candidate count/files, expected semantic anchors, and failure reason without dumping minified source. Do not force an incompatible build; update the guarded discovery and tests after reviewing upstream changes. `examples/docker-compose.yml` retains the upstream `/app/data` mount.
 
 ## Development
 
-No runtime dependencies are added. `npm test` covers classifier signals, malformed/empty safety, target configuration, recursion prevention, single-route/no-fan-out semantics, streaming/tools preservation, request-shape coverage, and guarded patch behavior. CI performs syntax checks, tests, upstream compatibility validation, Docker build, and an image smoke test. It publishes nothing.
+No runtime dependencies are added. Tests cover deterministic classification, realistic sanitized OpenHands fixtures, history reclassification, bounded keyword scoring, modality weighting, one-route/no-fan-out selection, body/tools/stream preservation, nested delegation, recursion protection, semantic discovery, zero/multiple candidate failures, idempotence, compatibility checks, Docker build, and image smoke tests.

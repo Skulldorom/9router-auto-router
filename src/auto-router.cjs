@@ -1,15 +1,18 @@
 "use strict";
 
+const KEYWORD_GROUPS = Object.freeze([
+  { reason: "audit", terms: ["fully audit", "deep review", "audit"] },
+  { reason: "concurrency", terms: ["race condition", "concurrency", "stale-write", "stale write"] },
+  { reason: "root-cause", terms: ["root cause", "debug intermittent", "failing tests with unclear cause", "investigate"] },
+  { reason: "precision", terms: ["financial precision", "decimal precision"] },
+  { reason: "architecture", terms: ["architecture", "migration", "repository-wide", "multi-file", "refactor"] },
+  { reason: "security", terms: ["security", "authentication", "permissions"] },
+  { reason: "performance", terms: ["performance investigation"] },
+]);
 const STRONG_TERMS = new Set(["fully audit", "deep review", "root cause", "race condition", "financial precision", "decimal precision", "performance investigation", "debug intermittent", "failing tests with unclear cause", "migration", "concurrency"]);
-const HARD_TERMS = [
-  "fully audit", "deep review", "root cause", "race condition", "financial precision",
-  "decimal precision", "performance investigation", "debug intermittent", "failing tests with unclear cause",
-  "audit", "investigate", "architecture", "migration", "concurrency", "security",
-  "authentication", "permissions", "refactor", "multi-file", "repository-wide"
-];
-
+const HARD_TERMS = KEYWORD_GROUPS.flatMap((group) => group.terms);
 const activeAutoCombos = new WeakMap();
-const DEFAULTS = Object.freeze({ easyTarget: "coder", hardTarget: "coder-high", hardThreshold: 6, longContextChars: 24000, largeToolResultChars: 12000, manyTools: 5, verbose: false });
+const DEFAULTS = Object.freeze({ easyTarget: "coder", hardTarget: "coder-high", hardThreshold: 6, longContextChars: 24000, largeToolResultChars: 12000, manyTools: 16, verbose: false });
 
 function positiveInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
@@ -28,20 +31,27 @@ function getConfig(env = process.env) {
   };
 }
 
+function isToolResult(value) {
+  return value?.role === "tool" || value?.type === "tool_result" || value?.type === "function_call_output";
+}
+
 function textLength(value, state) {
   if (typeof value === "string") return value.length;
   if (Array.isArray(value)) return value.reduce((sum, item) => sum + textLength(item, state), 0);
   if (!value || typeof value !== "object") return 0;
   let size = 0;
-  for (const key of ["text", "content", "input_text", "output_text", "arguments"]) if (typeof value[key] === "string") size += value[key].length;
-  if (typeof value.output === "string") { size += value.output.length; state.toolResultChars += value.output.length; }
-  if (value.role === "tool" || value.type === "tool_result" || value.type === "function_call_output") state.toolResultChars += typeof value.content === "string" ? value.content.length : 0;
+  for (const key of ["text", "content", "input_text", "output_text", "arguments", "output"]) {
+    if (typeof value[key] === "string") {
+      size += value[key].length;
+      if (isToolResult(value) || key === "output") state.toolResultChars += value[key].length;
+    }
+  }
   for (const key of ["content", "parts", "input"]) if (Array.isArray(value[key])) size += textLength(value[key], state);
   return size;
 }
 
 function inspectRequest(body) {
-  const state = { chars: 0, messageCount: 0, toolResultChars: 0, toolHistory: 0, modalities: 0 };
+  const state = { chars: 0, messageCount: 0, toolCalls: 0, toolResults: 0, toolResultChars: 0, modalities: 0 };
   if (!body || typeof body !== "object" || Array.isArray(body)) return state;
   for (const key of ["messages", "input", "contents"]) {
     const items = body[key] || body.request?.[key];
@@ -49,7 +59,9 @@ function inspectRequest(body) {
     state.messageCount += items.length;
     state.chars += textLength(items, state);
     for (const item of items) {
-      if (item?.role === "tool" || item?.type === "function_call_output" || item?.type === "tool_result") state.toolHistory += 1;
+      if (isToolResult(item)) state.toolResults += 1;
+      if (item?.role === "assistant" && (item.tool_calls || item.function_call)) state.toolCalls += Array.isArray(item.tool_calls) ? item.tool_calls.length : 1;
+      if (item?.type === "function_call") state.toolCalls += 1;
       if (/"(?:image_url|input_image|input_file|file|document|input_audio|input_video)"/.test(JSON.stringify(item))) state.modalities += 1;
     }
   }
@@ -60,24 +72,31 @@ function normalizeTools(body) { return Array.isArray(body?.tools) ? body.tools :
 
 function classifyTaskComplexity(body, config = getConfig()) {
   try {
-    if (!body || typeof body !== "object" || Array.isArray(body)) return { level: "hard", score: config.hardThreshold, reasons: ["invalid-or-empty-request"], metadata: {} };
+    if (!body || typeof body !== "object" || Array.isArray(body)) return { level: "hard", score: config.hardThreshold, reasons: ["invalid-request"], metadata: {} };
     const state = inspectRequest(body), tools = normalizeTools(body);
     const text = JSON.stringify({ messages: body.messages, input: body.input, contents: body.contents }).toLowerCase();
+    if (state.chars === 0 && state.messageCount === 0) return { level: "hard", score: config.hardThreshold, reasons: ["empty-request"], metadata: {} };
     let score = 0;
     const reasons = [], add = (points, reason) => { score += points; reasons.push(reason); };
     if (state.chars >= config.longContextChars) add(4, "large-context");
     else if (state.chars >= Math.floor(config.longContextChars / 3)) add(2, "medium-context");
-    else reasons.push("short-context");
-    if (state.messageCount >= 12) add(2, "many-messages");
+    if (state.messageCount >= 16) add(3, "long-history");
+    else if (state.messageCount >= 8) add(1, "multi-turn-history");
+    if (state.toolCalls + state.toolResults >= 8) add(3, "substantial-tool-history");
+    else if (state.toolCalls + state.toolResults >= 3) add(2, "repeated-tool-history");
     if (state.toolResultChars >= config.largeToolResultChars) add(4, "large-tool-result-history");
-    if (state.toolHistory >= 3) add(2, "repeated-tool-history");
-    if (tools.length >= config.manyTools) add(config.hardThreshold, "many-tools");
+    else if (state.toolResultChars >= Math.floor(config.largeToolResultChars / 3)) add(2, "medium-tool-result-history");
+    if (tools.length >= config.manyTools * 2) add(2, "huge-toolset");
+    else if (tools.length >= config.manyTools) add(1, "large-toolset");
     else if (tools.length > 0) add(1, "tools-present");
-    else reasons.push("no-tools");
-    if (state.modalities > 0) add(config.hardThreshold, "complex-modality");
-    for (const term of HARD_TERMS.filter((term) => text.includes(term)).slice(0, 3)) add(STRONG_TERMS.has(term) ? config.hardThreshold : 3, `keyword:${term.replace(/\s+/g, "-")}`);
-    if (state.chars === 0 && state.messageCount === 0) add(config.hardThreshold, "empty-request");
-    return { level: score >= config.hardThreshold ? "hard" : "easy", score, reasons: [...new Set(reasons)], metadata: { chars: state.chars, messages: state.messageCount, tools: tools.length, toolResultChars: state.toolResultChars, modalities: state.modalities } };
+    if (state.modalities >= 3) add(2, "multiple-modalities");
+    else if (state.modalities > 0) add(1, "modality-present");
+    for (const group of KEYWORD_GROUPS) {
+      const matched = group.terms.filter((term) => text.includes(term));
+      if (matched.length) add(matched.some((term) => STRONG_TERMS.has(term)) ? 6 : 3, group.reason);
+    }
+    score = Math.min(score, config.hardThreshold + 1);
+    return { level: score >= config.hardThreshold ? "hard" : "easy", score, reasons: [...new Set(reasons)], metadata: { chars: state.chars, messages: state.messageCount, tools: tools.length, toolCalls: state.toolCalls, toolResults: state.toolResults, toolResultChars: state.toolResultChars, modalities: state.modalities } };
   } catch {
     return { level: "hard", score: config.hardThreshold, reasons: ["classifier-error"], metadata: {} };
   }
