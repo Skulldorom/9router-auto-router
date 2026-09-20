@@ -1,0 +1,189 @@
+name: Validate and publish production image
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: 9router-auto-router-production
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/skulldorom/9router-auto-router
+  UPSTREAM_IMAGE: decolua/9router:latest
+
+jobs:
+  should-build:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decision.outputs.build }}
+      upstream_digest: ${{ steps.upstream.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: upstream
+        name: Resolve current upstream image digest
+        run: |
+          set -eu
+          docker buildx imagetools inspect "$UPSTREAM_IMAGE" > upstream-inspect.txt
+          digest=$(sed -n 's/^Digest:[[:space:]]*//p' upstream-inspect.txt | head -n1)
+          test -n "$digest"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - id: decision
+        name: Skip unchanged scheduled release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          UPSTREAM_DIGEST: ${{ steps.upstream.outputs.digest }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" != schedule ]; then
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if docker pull "${IMAGE_NAME}:latest" >/dev/null 2>&1; then
+            current_revision=$(docker image inspect "${IMAGE_NAME}:latest" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+            current_upstream=$(docker image inspect "${IMAGE_NAME}:latest" --format '{{ index .Config.Labels "io.github.skulldorom.9router-auto-router.upstream.digest" }}')
+            if [ "$current_revision" = "$GITHUB_SHA" ] && [ "$current_upstream" = "$UPSTREAM_DIGEST" ]; then
+              echo 'build=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo 'build=true' >> "$GITHUB_OUTPUT"
+
+  validate:
+    needs: should-build
+    if: needs.should-build.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      revision: ${{ steps.metadata.outputs.revision }}
+      upstream_digest: ${{ steps.metadata.outputs.upstream_digest }}
+      upstream_version: ${{ steps.metadata.outputs.upstream_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Static checks
+        run: npm run check
+      - name: Unit, classifier, and routing tests
+        run: npm test
+      - id: metadata
+        name: Resolve and pull immutable upstream image
+        run: |
+          set -eu
+          docker buildx imagetools inspect "$UPSTREAM_IMAGE" > upstream-inspect.txt
+          digest=$(sed -n 's/^Digest:[[:space:]]*//p' upstream-inspect.txt | head -n1)
+          test -n "$digest"
+          immutable_image="decolua/9router@${digest}"
+          docker pull "$immutable_image"
+          version=$(docker image inspect "$immutable_image" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')
+          [ -n "$version" ] || version=unknown
+          printf 'revision=%s\nupstream_digest=%s\nupstream_version=%s\n' "$GITHUB_SHA" "$digest" "$version" >> "$GITHUB_OUTPUT"
+          printf 'UPSTREAM_IMAGE=%s\nUPSTREAM_DIGEST=%s\nUPSTREAM_VERSION=%s\n' "$immutable_image" "$digest" "$version" >> "$GITHUB_ENV"
+      - name: Compatibility check against the immutable upstream image
+        run: ./scripts/check-upstream-compatibility.sh
+      - name: Build derived image from the validated immutable upstream image
+        run: |
+          docker build \
+            --build-arg UPSTREAM_IMAGE="$UPSTREAM_IMAGE" \
+            --build-arg AUTO_ROUTER_REVISION="$GITHUB_SHA" \
+            --build-arg UPSTREAM_IMAGE_NAME="decolua/9router:latest" \
+            --build-arg UPSTREAM_DIGEST="$UPSTREAM_DIGEST" \
+            --build-arg UPSTREAM_VERSION="$UPSTREAM_VERSION" \
+            --build-arg BUILD_CREATED="$(date --utc +%Y-%m-%dT%H:%M:%SZ)" \
+            --tag 9router-auto-router:validated .
+      - name: Docker smoke test
+        run: ./scripts/smoke-test.sh 9router-auto-router:validated
+      - name: Runtime response test
+        run: ./scripts/runtime-test.sh 9router-auto-router:validated
+      - name: Save validated image for the publish job
+        run: docker save 9router-auto-router:validated | gzip > validated-image.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-image
+          path: validated-image.tar.gz
+          retention-days: 1
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-image
+      - name: Load the tested image
+        run: gzip --decompress --stdout validated-image.tar.gz | docker load
+      - name: Refuse to let a stale run replace a newer release
+        id: current
+        env:
+          REVISION: ${{ needs.validate.outputs.revision }}
+        run: |
+          set -eu
+          current=$(git ls-remote https://github.com/Skulldorom/9router-auto-router.git refs/heads/main | cut -f1)
+          if [ "$current" = "$REVISION" ]; then
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
+          else
+            echo "Validated ${REVISION}, but main is now ${current}; a newer run owns latest."
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Authenticate to GHCR after validation
+        if: steps.current.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable tags, then last-known-good latest
+        if: steps.current.outputs.publish == 'true'
+        env:
+          REVISION: ${{ needs.validate.outputs.revision }}
+          UPSTREAM_DIGEST: ${{ needs.validate.outputs.upstream_digest }}
+          UPSTREAM_VERSION: ${{ needs.validate.outputs.upstream_version }}
+        run: |
+          set -eu
+          short_revision=$(printf '%s' "$REVISION" | cut -c1-12)
+          tags="sha-${short_revision}"
+          if [ "$UPSTREAM_VERSION" != unknown ]; then
+            tags="$tags 9router-${UPSTREAM_VERSION}-sha-${short_revision}"
+          fi
+          for tag in $tags; do
+            existing=$(docker buildx imagetools inspect "${IMAGE_NAME}:${tag}" 2>/dev/null || true)
+            if [ -n "$existing" ]; then
+              existing_revision=$(printf '%s\n' "$existing" | sed -n 's/^[[:space:]]*org.opencontainers.image.revision:[[:space:]]*//p' | head -n1)
+              existing_upstream=$(printf '%s\n' "$existing" | sed -n 's/^[[:space:]]*io.github.skulldorom.9router-auto-router.upstream.digest:[[:space:]]*//p' | head -n1)
+              [ "$existing_revision" = "$REVISION" ] && [ "$existing_upstream" = "$UPSTREAM_DIGEST" ] || {
+                echo "Immutable tag ${tag} already identifies a different image." >&2
+                exit 1
+              }
+            else
+              docker tag 9router-auto-router:validated "${IMAGE_NAME}:${tag}"
+              docker push "${IMAGE_NAME}:${tag}"
+            fi
+          done
+          docker tag 9router-auto-router:validated "${IMAGE_NAME}:latest"
+          docker push "${IMAGE_NAME}:latest"
+      - name: Make the package public when repository settings permit
+        if: steps.current.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          owner_type=$(gh api repos/Skulldorom/9router-auto-router --jq .owner.type)
+          if [ "$owner_type" = Organization ]; then
+            endpoint=/orgs/Skulldorom/packages/container/9router-auto-router
+          else
+            endpoint=/user/packages/container/9router-auto-router
+          fi
+          gh api --method PATCH "$endpoint" -f visibility=public || \
+            echo "Package visibility was not changed; configure the GHCR package as public in GitHub settings."

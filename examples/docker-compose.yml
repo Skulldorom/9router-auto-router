@@ -1,15 +1,23 @@
 services:
   9router:
-    build:
-      context: ..
-      args:
-        UPSTREAM_IMAGE: decolua/9router:0.5.75
-    image: 9router-auto-router:0.5.75
+    image: ghcr.io/skulldorom/9router-auto-router:latest
     container_name: 9router
     restart: unless-stopped
     ports:
       - "20128:20128"
     volumes:
-      - ./data:/app/data
+      - 9router-data:/app/data
     environment:
       DATA_DIR: /app/data
+      HEADROOM_URL: http://headroom:8787
+    depends_on:
+      headroom:
+        condition: service_started
+
+  headroom:
+    image: ghcr.io/headroomlabs-ai/headroom:latest
+    command: headroom proxy --host 0.0.0.0 --port 8787
+    restart: unless-stopped
+
+volumes:
+  9router-data:

@@ -60,7 +60,7 @@ coder-auto
 
 ## Current upstream integration
 
-Inspected upstream default branch commit `a8c9d3802c5933500fba95416f5bf0c130581396` and published `decolua/9router:0.5.75` / `latest` image digest `sha256:7c893bc2c27ecea2ae337abd5eacfec9e5763091b3a3b7862fc0625b770bb156`. The production server uses the compiled Next standalone assets; `/app/open-sse/services/combo.js` is not imported by that runtime copy, so changing it would not affect requests.
+Validated upstream `decolua/9router:0.5.75` / `latest` image digest `sha256:7c893bc2c27ecea2ae337abd5eacfec9e5763091b3a3b7862fc0625b770bb156` during initial integration. The release workflow resolves and validates the current immutable digest before every publish. The production server uses the compiled Next standalone assets; `/app/open-sse/services/combo.js` is not imported by that runtime copy, so changing it would not affect requests.
 
 The overlay dynamically discovers the single runtime handler under `/app/.next/server`, rather than assuming a chunk name. It requires exactly one file containing all of these semantic anchors:
 
@@ -112,31 +112,95 @@ Example:
 AUTO-ROUTER coder-auto → coder-high level=hard score=7 reasons=tools-present,audit,concurrency
 ```
 
-## Build, compatibility, and deployment
+## Deploy the published image
 
-Use a pinned image in production:
+Use the prebuilt GHCR image. No repository clone, Node.js installation, patch command, or local Docker build is required. It is a drop-in replacement for `decolua/9router:latest` and keeps the upstream command, ports, environment variables, networks, `/app/data` path, and persistent configuration behavior.
+
+Change only the image:
+
+```diff
+services:
+  9router:
+-   image: decolua/9router:latest
++   image: ghcr.io/skulldorom/9router-auto-router:latest
+```
+
+Keep the existing volume unchanged. In particular, this persistent 9Router configuration remains intact:
+
+```yaml
+volumes:
+  - 9router-data:/app/data
+```
+
+Accounts, settings, combos, provider configuration, ports, networks, and Headroom configuration continue to work without changes.
+
+### Complete Compose example
+
+```yaml
+services:
+  9router:
+    image: ghcr.io/skulldorom/9router-auto-router:latest
+    restart: unless-stopped
+    ports:
+      - "20128:20128"
+    volumes:
+      - 9router-data:/app/data
+    environment:
+      DATA_DIR: /app/data
+      HEADROOM_URL: http://headroom:8787
+      AUTO_ROUTER_EASY_TARGET: coder
+      AUTO_ROUTER_HARD_TARGET: coder-high
+    depends_on:
+      headroom:
+        condition: service_started
+
+  headroom:
+    image: ghcr.io/headroomlabs-ai/headroom:latest
+    command: headroom proxy --host 0.0.0.0 --port 8787
+    restart: unless-stopped
+
+volumes:
+  9router-data:
+```
+
+`HEADROOM_URL: http://headroom:8787` is retained exactly. The Auto Router overlay does not need any Headroom-specific configuration.
+
+### Update and rollback
+
+Pull and restart to update to the latest validated release:
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+Every release also has recoverable immutable tags: `sha-<auto-router-commit>` and, when the upstream version label is available, `9router-<version>-sha-<auto-router-commit>`. Pin one to roll back:
+
+```yaml
+services:
+  9router:
+    image: ghcr.io/skulldorom/9router-auto-router:sha-<auto-router-commit>
+```
+
+The GitHub Actions release workflow validates the exact `decolua/9router@sha256:...` base before building. It runs static checks, all tests, compatibility discovery, Docker smoke tests, and a live container response test before it authenticates and updates `latest`. A six-hour scheduled check rebuilds only if this source commit or the upstream digest changed; failed validation leaves the prior known-good `latest` untouched.
+
+## Development and advanced local builds
+
+Local builds are for development, upstream compatibility work, or testing a candidate image. Use the immutable upstream digest that passed compatibility checks; do not treat a mutable `latest` tag as reproducible.
 
 ```sh
 npm run check && npm test
-UPSTREAM_IMAGE=decolua/9router:0.5.75 ./scripts/check-upstream-compatibility.sh
-docker build --build-arg UPSTREAM_IMAGE=decolua/9router:0.5.75 -t 9router-auto-router:0.5.75 .
-./scripts/smoke-test.sh 9router-auto-router:0.5.75
+UPSTREAM_IMAGE=decolua/9router@sha256:<digest> ./scripts/check-upstream-compatibility.sh
+docker build \
+  --build-arg UPSTREAM_IMAGE=decolua/9router@sha256:<digest> \
+  --build-arg AUTO_ROUTER_REVISION="$(git rev-parse HEAD)" \
+  --build-arg UPSTREAM_DIGEST=sha256:<digest> \
+  --build-arg UPSTREAM_VERSION=<version> \
+  --tag 9router-auto-router:local .
+./scripts/smoke-test.sh 9router-auto-router:local
+./scripts/runtime-test.sh 9router-auto-router:local
 ```
 
-```sh
-docker run -d --name 9router -p 20128:20128 \
-  -v "$HOME/.9router:/app/data" -e DATA_DIR=/app/data \
-  9router-auto-router:0.5.75
-```
+Compatibility errors report the image, candidate count/files, expected semantic anchors, and failure reason without dumping minified source. Do not force an incompatible build; update the guarded discovery and tests after reviewing upstream changes.
 
-`latest` is checked in CI as a non-blocking compatibility signal. Test it deliberately before deployment:
-
-```sh
-UPSTREAM_IMAGE=decolua/9router:latest ./scripts/check-upstream-compatibility.sh
-```
-
-Compatibility errors report the image, candidate count/files, expected semantic anchors, and failure reason without dumping minified source. Do not force an incompatible build; update the guarded discovery and tests after reviewing upstream changes. `examples/docker-compose.yml` retains the upstream `/app/data` mount.
-
-## Development
-
-No runtime dependencies are added. Tests cover deterministic classification, realistic sanitized OpenHands fixtures, history reclassification, bounded keyword scoring, modality weighting, one-route/no-fan-out selection, body/tools/stream preservation, nested delegation, recursion protection, semantic discovery, zero/multiple candidate failures, idempotence, compatibility checks, Docker build, and image smoke tests.
+No runtime dependencies are added. Tests cover deterministic classification, realistic sanitized OpenHands fixtures, history reclassification, bounded keyword scoring, modality weighting, one-route/no-fan-out selection, body/tools/stream preservation, nested delegation, recursion protection, semantic discovery, zero/multiple candidate failures, idempotence, compatibility checks, Docker build, smoke tests, and runtime responses.
