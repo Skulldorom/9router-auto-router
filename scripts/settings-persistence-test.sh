@@ -8,10 +8,23 @@ COOKIE_JAR="$DATA_DIR/cookies.txt"
 PASSWORD="auto-router-integration-password"
 
 cleanup() {
+  status=$?
+  trap - EXIT INT TERM
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  rm -rf "$DATA_DIR"
+  if [ -d "$DATA_DIR" ] && ! rmdir "$DATA_DIR" 2>/dev/null; then
+    docker run --rm --user 0:0 --entrypoint /bin/sh -v "$DATA_DIR:/cleanup" "$IMAGE" \
+      -c 'find /cleanup -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +' || true
+    if ! rmdir "$DATA_DIR"; then
+      echo "Settings persistence test cleanup failed: could not remove $DATA_DIR." >&2
+      [ "$status" -ne 0 ] && exit "$status"
+      exit 1
+    fi
+  fi
+  exit "$status"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 chmod 777 "$DATA_DIR"
 
 start() {

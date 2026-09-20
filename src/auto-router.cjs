@@ -120,7 +120,7 @@ function selectRoute(body, comboName, { env = process.env, comboStrategies = {},
   const persisted = comboStrategies?.[comboName]?.autoRouter;
   const config = getConfig(env, persisted), classification = classifyTaskComplexity(body, config);
   const target = classification.level === "easy" ? config.easyTarget : config.hardTarget;
-  if (!target) throw new Error("AUTO-ROUTER target is empty. Set AUTO_ROUTER_EASY_TARGET and AUTO_ROUTER_HARD_TARGET.");
+  if (!target) throw new Error(`AUTO-ROUTER target is empty for combo "${comboName}". Configure Easy target and Hard target in the combo's Auto Router settings.`);
   if (target === comboName) throw new Error(`AUTO-ROUTER recursion blocked: combo "${comboName}" targets itself.`);
   if ((comboStrategies[target]?.fallbackStrategy || globalStrategy) === "auto") throw new Error(`AUTO-ROUTER recursion blocked: target "${target}" also resolves with strategy "auto".`);
   return { target, classification, config };
