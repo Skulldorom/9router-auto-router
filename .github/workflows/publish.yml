@@ -139,7 +139,7 @@ jobs:
           fi
       - name: Authenticate to GHCR after validation
         if: steps.current.outputs.publish == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
