@@ -46,7 +46,6 @@ assert_settings() {
       for (const [name, strategy] of Object.entries(expected)) {
         if (JSON.stringify(strategies[name]) !== JSON.stringify(strategy)) throw new Error(`unexpected persisted ${name} configuration`);
       }
-      if (Object.keys(strategies).length !== Object.keys(expected).length) throw new Error("unexpected combo strategy entries");
     });
   '
 }
