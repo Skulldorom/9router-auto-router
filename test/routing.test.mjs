@@ -14,16 +14,28 @@ const serverUi = 'let bI=[{value:"fallback",label:"Fallback — try in order"},{
 const clientUi = 'let f=[{value:"fallback",label:"Fallback — try in order"},{value:"round-robin",label:"Round Robin — rotate"},{value:"fusion",label:"Fusion — panel + judge"}];function g({combo:e,getCaps:t,activeProviders:s=[],copied:i,onCopy:n,onEdit:r,onDelete:o,strategy:c={},onSetStrategy:m}){let[x,p]=(0,a.useState)(!1),u=c.fallbackStrategy||"fallback",h=c.judgeModel||"";return(0,l.jsxs)(d.Zp,{children:[(0,l.jsx)(d.l6,{options:f,value:u,onChange:e=>m({fallbackStrategy:e.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===u&&"details"]})}strategy:y[e.name]||{},onSetStrategy:t=>_(e.name,t)';
 const aliasedServerUi = 'let strategies=[{value:"fallback",label:"Fallback — try in order"},{value:"round-robin",label:"Round Robin — rotate"},{value:"fusion",label:"Fusion — panel + judge"}];function RenderCombo({copied:z,onSetStrategy:save,combo:model,strategy:config={},getCaps:caps,onDelete:drop}){let[open,setOpen]=(0,React.useState)(!1),selected=config.fallbackStrategy||"fallback",judge=config.judgeModel||"";return(0,View.jsxs)(Panel.Zp,{children:[(0,View.jsx)(Panel.l6,{options:strategies,value:selected,onChange:change=>save({fallbackStrategy:change.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===selected&&"details"]})}strategy:allStrategies[model.name]||{},onSetStrategy:next=>commit(model.name,next)';
 const aliasedClientUi = 'let choices=[{value:"fallback",label:"Fallback — try in order"},{value:"round-robin",label:"Round Robin — rotate"},{value:"fusion",label:"Fusion — panel + judge"}];function ClientCombo({strategy:settings={},combo:record,onSetStrategy:write,copied:copied}){let[shown,setShown]=(0,Hooks.useState)(!1),kind=settings.fallbackStrategy||"fallback",judge=settings.judgeModel||"";return(0,Jsx.jsxs)(Card.Zp,{children:[(0,Jsx.jsx)(Card.l6,{options:choices,value:kind,onChange:input=>write({fallbackStrategy:input.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===kind&&"details"]})}strategy:table[record.name]||{},onSetStrategy:value=>persist(record.name,value)';
-function fixture({ duplicate = false, valid = true, shadow = false, aliases = false } = {}) {
+function fixture({ duplicate = false, valid = true, shadow = false, aliases = false, handler: handlerOverride } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "auto-router-patch-"));
   const server = path.join(dir, ".next/server/chunks"), serverUiDir = path.join(dir, ".next/server/app/dashboard/combos"), clientUiDir = path.join(dir, ".next/static/chunks/app/dashboard/combos");
   fs.mkdirSync(server, { recursive: true }); fs.mkdirSync(serverUiDir, { recursive: true }); fs.mkdirSync(clientUiDir, { recursive: true });
   const handler = shadow ? `${runtime("c", "f", "d", "u", "k", "e", "r")}${shadowRuntime("a", "j", "b", "f", "g")}` : `${runtime("c", "f", "d", "u", "k", "e", "r")}${nestedRuntime("a", "j", "b", "f", "g", "i", "h")}`;
-  if (valid) fs.writeFileSync(path.join(server, "dynamic-handler.js"), handler);
+  if (valid) fs.writeFileSync(path.join(server, "dynamic-handler.js"), handlerOverride || handler);
   if (duplicate) fs.writeFileSync(path.join(server, "another-handler.js"), `${runtime("c", "f", "d", "u", "k", "e", "r")}${nestedRuntime("a", "j", "b", "f", "g", "i", "h")}`);
   fs.writeFileSync(path.join(serverUiDir, "page.js"), aliases ? aliasedServerUi : serverUi); fs.writeFileSync(path.join(clientUiDir, "page-hash.js"), aliases ? aliasedClientUi : clientUi);
   return dir;
 }
+// Mirrors the supported upstream image: extra properties follow `handleSingleModel`, and
+// the handler body contains statements before its single delegation return.
+const upstreamLikeRuntime = (body, strategy, combo, models, settings, strategies, resolver = "i") => `exports.modules={3894:(a,b,c)=>{async function z(a,b,c,d,e){} async function y(){let s=(0,o.t8)(${body}),${models}=await (0,${resolver}.d_)(${combo});if(${models}){let ${strategies}=${settings}.comboStrategies||{},${strategy}=${strategies}[${combo}]?.fallbackStrategy||${settings}.comboStrategy||"fallback";${settings}.comboStickyRoundRobinLimit;if("fusion"===${strategy})return t.info("CHAT",\`Combo "\${${combo}}" with \${${models}.length} models (strategy: fusion)\`),(0,o.vt)({body:${body},models:${models},handleSingleModel:(c,d,e)=>{let f=b;if(e&&b){let{tools:a,tool_choice:c,...d}=b.body||{};f={...b,body:d}}return z(c,d,f,a,j)},log:t,comboName:${combo},judgeModel:e[${combo}]?.judgeModel,tuning:e[${combo}]?.fusionTuning})};}};`;
+// Irrelevant minified-looking code and adversarial decoys: unrelated resolver calls,
+// unrelated comboStrategies bindings, and a misleading dispatch-like object.
+const pad = (size) => `/*${"p".repeat(size)}*/`;
+const decoys = 'let zz=await (0,n.d_)("unrelated-target");let ww=other.comboStrategies||{};let decoy={body:"decoy",models:"decoy",handleSingleModel:()=>0};req("decoy-body");';
+const baseHandler = () => `${runtime("c", "f", "d", "u", "k", "e", "r")}${nestedRuntime("a", "j", "b", "f", "g", "i", "h")}`;
+const distantHandler = () => [
+  runtime("c", "f", "d", "u", "k", "e", "r").replace('comboStickyRoundRobinLimit;if("fusion"===', `comboStickyRoundRobinLimit;${decoys}${pad(3600)};if("fusion"===`).replace("handleSingleModel:(c,d,e)=>{", `handleSingleModel:(c,d,e)=>{${pad(1400)}`),
+  nestedRuntime("a", "j", "b", "f", "g", "i", "h").replace('"fallback";if("fusion"===', `"fallback";${decoys}${pad(3600)};if("fusion"===`).replace("handleSingleModel:(a,b,f)=>{", `handleSingleModel:(a,b,f)=>{${pad(1400)}`),
+].join("");
 // Reproduces upstream's real shadowing: the minified resolver alias `i` is later
 // re-bound by an inner `let ...i=` in the same scope, so inlining `(0,i.d_)` at the
 // dispatch would hit a temporal-dead-zone error. The patcher must capture the alias
@@ -95,6 +107,46 @@ test("patcher captures the models resolver before an inner rebinding shadow", ()
   const captureIndex = patched.indexOf("const _arResolvef=");
   const shadowIndex = patched.indexOf("let g=await (0,h.mt)(),i=");
   assert.ok(captureIndex > 0 && captureIndex < shadowIndex, "resolver capture must precede the shadowing statement");
+});
+test("patcher discovers bindings beyond the former fixed byte windows", () => {
+  const dir = fixture({ handler: distantHandler() });
+  const result = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const patched = fs.readFileSync(path.join(dir, ".next/server/chunks/dynamic-handler.js"), "utf8");
+  assert.equal((patched.match(/9router-auto-router:v3/g) || []).length, 1);
+  assert.equal((patched.match(/routeAutoCombo/g) || []).length, 2);
+  assert.match(patched, /const _arResolveu=\(0,r\.d_\);/); assert.match(patched, /const _arResolvef=\(0,h\.d_\);/);
+  assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,f,a,j\)/); assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,g,d,e\)/);
+  assert.ok(!/const _arResolve\w*=\(0,n\.d_\)/.test(patched), "unrelated resolver must not be captured");
+  // Idempotent: a second run must not duplicate injections.
+  assert.equal(spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" }).status, 0);
+  assert.equal((fs.readFileSync(path.join(dir, ".next/server/chunks/dynamic-handler.js"), "utf8").match(/routeAutoCombo/g) || []).length, 2);
+});
+test("patcher handles upstream-shaped dispatch payloads with trailing properties", () => {
+  const dir = fixture({ handler: `${upstreamLikeRuntime("c", "f", "d", "u", "k", "e", "r")}${nestedRuntime("a", "j", "b", "f", "g", "i", "h")}` });
+  const result = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  const patched = fs.readFileSync(path.join(dir, ".next/server/chunks/dynamic-handler.js"), "utf8");
+  assert.match(patched, /const _arResolveu=\(0,r\.d_\);/);
+  assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,f,a,j\)/);
+});
+test("patcher fails closed when resolver discovery is ambiguous", () => {
+  const ambiguous = baseHandler().replace("let q=k.comboStickyRoundRobinLimit;", 'let q=k.comboStickyRoundRobinLimit;let u=await (0,r.d_)(d);let u=await (0,n.d_)(d);');
+  const result = spawnSync(process.execPath, [patcher, fixture({ handler: ambiguous })], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Runtime dispatch data-flow validation/);
+});
+test("patcher fails closed when comboStrategies association is ambiguous", () => {
+  const ambiguous = baseHandler().replace("let q=k.comboStickyRoundRobinLimit;", 'let q=k.comboStickyRoundRobinLimit;let e2=k.comboStrategies||{},f=e2[d]?.fallbackStrategy||k.comboStrategy||"fallback";');
+  const result = spawnSync(process.execPath, [patcher, fixture({ handler: ambiguous })], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Runtime dispatch data-flow validation/);
+});
+test("patcher fails closed when a required dispatch binding is absent", () => {
+  const broken = baseHandler().replace("body:c,models:u,", "models:u,");
+  const result = spawnSync(process.execPath, [patcher, fixture({ handler: broken })], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Runtime dispatch data-flow validation failed/);
 });
 test("patcher fails closed with zero runtime candidates", () => {
   const result = spawnSync(process.execPath, [patcher, fixture({ valid: false })], { encoding: "utf8", env: { ...process.env, UPSTREAM_IMAGE: "example:zero" } });

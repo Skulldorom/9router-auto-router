@@ -343,12 +343,23 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
     let route;
     try {
       route = selectRoute(body, comboName, { comboStrategies, globalStrategy });
-      if (targetExists && !await targetExists(route.target)) throw new Error(`${route.classification.level === "easy" ? "Easy" : "Hard"} target "${route.target}" does not exist.`);
     } catch (error) {
       log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`);
       return errorResponse(error.message);
     }
     const { target, classification, config } = route;
+    if (targetExists) {
+      // A resolver that resolves to `false` means the configured target is genuinely
+      // absent -> Auto Router configuration error. A resolver that throws/rejects is an
+      // upstream failure: let it propagate so it is not misreported as a bad target.
+      const exists = await targetExists(target);
+      if (!exists) {
+        const label = classification.level === "easy" ? "Easy" : "Hard";
+        const message = `${label} target "${target}" does not exist.`;
+        log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${message}`);
+        return errorResponse(message);
+      }
+    }
     log.info("AUTO-ROUTER", `combo=${comboName} level=${classification.level} target=${target} score=${classification.score} reasons=${classification.reasons.join(",") || "none"}`);
     if (config.verbose) log.info("AUTO-ROUTER", `combo=${comboName} metadata=${JSON.stringify(classification.metadata)}`);
     return await delegate(body, target);
