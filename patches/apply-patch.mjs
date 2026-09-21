@@ -36,10 +36,13 @@ function dispatchAnchors(source) {
   if (new Set(anchors.map((match) => match[0])).size !== 2) fail("Runtime handler contains ambiguous duplicate fusion dispatch anchors.");
   return anchors;
 }
+function verifyPatchedRuntime(target, source = fs.readFileSync(target, "utf8")) {
+  if (count(source, runtimeMarker) !== 1 || count(source, "routeAutoCombo") !== 2) fail(`Patched runtime handler integrity failed:\n  ${path.relative(appRoot, target)}`);
+}
 function patchRuntime(target) {
   let source = fs.readFileSync(target, "utf8");
   if (source.includes(runtimeMarker)) {
-    if (count(source, runtimeMarker) !== 1 || count(source, "routeAutoCombo") !== 2) fail(`Patched runtime handler integrity failed:\n  ${path.relative(appRoot, target)}`);
+    verifyPatchedRuntime(target, source);
     return false;
   }
   const anchors = dispatchAnchors(source);
@@ -81,12 +84,15 @@ function discoverUiCandidates() {
   if (candidates.length !== 2) fail(`Combo UI strategy asset candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  Fallback — try in order, Round Robin — rotate, Fusion — panel + judge`);
   return candidates;
 }
+function verifyPatchedUi(target, source = fs.readFileSync(target, "utf8")) {
+  if (count(source, uiMarker) !== 1 || !source.includes('label:"Auto Router"') || !source.includes("autoRouter")) fail(`Patched UI integrity failed:\n  ${path.relative(appRoot, target)}`);
+}
 function patchUi(targets) {
   let changed = false;
   for (const target of targets) {
     let source = fs.readFileSync(target, "utf8");
     if (source.includes(uiMarker)) {
-      if (count(source, uiMarker) !== 1 || !source.includes('label:"Auto Router"') || !source.includes("autoRouter")) fail(`Patched UI integrity failed:\n  ${path.relative(appRoot, target)}`);
+      verifyPatchedUi(target, source);
       continue;
     }
     if (count(source, UI_ANCHOR) !== 1) fail(`UI strategy anchor is not unique:\n  ${path.relative(appRoot, target)}`);
@@ -138,7 +144,13 @@ function patchUi(targets) {
 const runtime = discoverRuntimeCandidate();
 const ui = discoverUiCandidates();
 if (checkOnly) {
-  dispatchAnchors(fs.readFileSync(runtime, "utf8"));
+  const runtimeSource = fs.readFileSync(runtime, "utf8");
+  if (runtimeSource.includes(runtimeMarker)) verifyPatchedRuntime(runtime, runtimeSource);
+  else dispatchAnchors(runtimeSource);
+  for (const target of ui) {
+    const source = fs.readFileSync(target, "utf8");
+    if (source.includes(uiMarker)) verifyPatchedUi(target, source);
+  }
   console.log(`9Router Auto Router compatibility check passed: runtime=${path.relative(appRoot, runtime)} ui=${ui.map((file) => path.relative(appRoot, file)).join(",")}`);
 } else {
   const runtimeChanged = patchRuntime(runtime);
