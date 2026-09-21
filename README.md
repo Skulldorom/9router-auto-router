@@ -1,5 +1,9 @@
 # 9Router Auto Router
 
+<p align="center">
+  <a href="https://ko-fi.com/skulldorom"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" /></a>
+</p>
+
 Small Docker overlay for [decolua/9router](https://github.com/decolua/9router). It remains a drop-in 9Router image: Auto Router chooses exactly one normal 9Router combo, then delegates execution back to 9Router.
 
 ## UI-first setup
