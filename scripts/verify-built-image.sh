@@ -36,10 +36,12 @@ runtime_file=$(printf "%s\\n" "$runtime_files" | sed -n "/./{p;q;}")
 ui_files=$(grep -RFl "9router-auto-router-ui:v3" /app/.next 2>/dev/null || true)
 [ "$(printf "%s\\n" "$ui_files" | sed "/^$/d" | wc -l)" -eq 2 ]
 for file in $ui_files; do
-  grep -Fq "label:\"Auto Router\"" "$file"
-  grep -Fq "Easy target" "$file"
-  grep -Fq "Hard target" "$file"
-  grep -Fq "autoRouter" "$file"
+  [ "$(grep -o "9router-auto-router-ui:v3" "$file" | wc -l)" -eq 1 ]
+  [ "$(grep -o "label:\"Auto Router\"" "$file" | wc -l)" -eq 1 ]
+  [ "$(grep -o "Easy target" "$file" | wc -l)" -eq 1 ]
+  [ "$(grep -o "Hard target" "$file" | wc -l)" -eq 1 ]
+  [ "$(grep -o "availableCombos:" "$file" | wc -l)" -eq 2 ]
+  [ "$(grep -o "autoRouter" "$file" | wc -l)" -ge 2 ]
 done
 '
 docker run --rm --entrypoint sh "$IMAGE" -c "$check" || fail "runtime overlay or generated UI verification failed"

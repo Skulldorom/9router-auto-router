@@ -5,7 +5,7 @@
   "description": "Deterministic pre-generation routing overlay for 9Router combos",
   "type": "module",
   "scripts": {
-    "lint": "eslint .",
+    "lint": "eslint eslint.config.js src patches test --max-warnings=0",
     "syntax": "node --check src/auto-router.cjs && node --check patches/apply-patch.mjs && node --check eslint.config.js && node --check test/*.mjs",
     "check": "npm run syntax && npm run lint",
     "test": "node --test"

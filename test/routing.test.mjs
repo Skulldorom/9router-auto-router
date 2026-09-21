@@ -147,6 +147,16 @@ test("patcher fails closed for ambiguous or incompatible UI component data flow"
   }
 });
 
+
+test("patcher check validates unpatched UI semantic data flow", () => {
+  const dir = fixture();
+  const target = path.join(dir, ".next/server/app/dashboard/combos/page.js");
+  fs.writeFileSync(target, fs.readFileSync(target, "utf8").replace("strategy:k[a.name]||{},onSetStrategy:b=>A(a.name,b)", "strategy:k[a.name]||{},onSetStrategy:b=>A(b,a.name)"));
+  const result = spawnSync(process.execPath, [patcher, dir, "--check"], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /combo collection call/);
+});
+
 test("patcher fails closed when UI candidates disappear", () => {
   const dir = fixture();
   fs.rmSync(path.join(dir, ".next/static/chunks/app/dashboard/combos/page-hash.js"));

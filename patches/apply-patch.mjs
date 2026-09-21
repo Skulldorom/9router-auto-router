@@ -153,6 +153,7 @@ if (checkOnly) {
   for (const target of ui) {
     const source = fs.readFileSync(target, "utf8");
     if (source.includes(uiMarker)) verifyPatchedUi(target, source);
+    else uiPatchSpec(source, target);
   }
   console.log(`9Router Auto Router compatibility check passed: runtime=${path.relative(appRoot, runtime)} ui=${ui.map((file) => path.relative(appRoot, file)).join(",")}`);
 } else {

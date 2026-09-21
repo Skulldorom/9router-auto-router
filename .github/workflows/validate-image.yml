@@ -39,6 +39,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          cache: npm
+      - run: npm ci
       - name: Validate immutable upstream digest and local image tag
         env:
           RESOLVED_UPSTREAM_DIGEST: ${{ inputs.upstream_digest }}
