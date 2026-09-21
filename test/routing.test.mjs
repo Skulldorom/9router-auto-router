@@ -12,21 +12,23 @@ const runtime = (body, strategy, combo, models, settings, strategies, resolver =
 const nestedRuntime = (body, strategy, combo, models, settings, strategies, resolver = "i") => `exports.modules={3894:(a,b,c)=>{async function z(a,b,c,d,e){let q=await (0,i.mA)(${combo});if(!q.provider){let ${models}=await (0,${resolver}.d_)(${combo});if(${models}){let g=await (0,h.mt)(),${strategies}=${settings}.comboStrategies||{},${strategy}=${strategies}[${combo}]?.fallbackStrategy||${settings}.comboStrategy||"fallback";if("fusion"===${strategy})return t.info("CHAT",\`Combo "\${${combo}}" with \${${models}.length} models (strategy: fusion)\`),(0,o.vt)({body:${body},models:${models},handleSingleModel:(a,b,f)=>{let g=c;return z(a,b,g,d,e)});}}};`;
 const serverUi = 'let bI=[{value:"fallback",label:"Fallback — try in order"},{value:"round-robin",label:"Round Robin — rotate"},{value:"fusion",label:"Fusion — panel + judge"}];function bJ({combo:a,getCaps:b,activeProviders:c=[],copied:d,onCopy:e,onEdit:f,onDelete:g,strategy:h={},onSetStrategy:i}){let[j,k]=(0,x.useState)(!1),l=h.fallbackStrategy||"fallback",m=h.judgeModel||"";return(0,w.jsxs)(bA.Zp,{children:[(0,w.jsx)(bA.l6,{options:bI,value:l,onChange:a=>i({fallbackStrategy:a.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===l&&"details"]})}strategy:k[a.name]||{},onSetStrategy:b=>A(a.name,b)';
 const clientUi = 'let f=[{value:"fallback",label:"Fallback — try in order"},{value:"round-robin",label:"Round Robin — rotate"},{value:"fusion",label:"Fusion — panel + judge"}];function g({combo:e,getCaps:t,activeProviders:s=[],copied:i,onCopy:n,onEdit:r,onDelete:o,strategy:c={},onSetStrategy:m}){let[x,p]=(0,a.useState)(!1),u=c.fallbackStrategy||"fallback",h=c.judgeModel||"";return(0,l.jsxs)(d.Zp,{children:[(0,l.jsx)(d.l6,{options:f,value:u,onChange:e=>m({fallbackStrategy:e.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===u&&"details"]})}strategy:y[e.name]||{},onSetStrategy:t=>_(e.name,t)';
-function fixture({ duplicate = false, valid = true, shadow = false } = {}) {
+const aliasedServerUi = 'let strategies=[{value:"fallback",label:"Fallback — try in order"},{value:"round-robin",label:"Round Robin — rotate"},{value:"fusion",label:"Fusion — panel + judge"}];function RenderCombo({copied:z,onSetStrategy:save,combo:model,strategy:config={},getCaps:caps,onDelete:drop}){let[open,setOpen]=(0,React.useState)(!1),selected=config.fallbackStrategy||"fallback",judge=config.judgeModel||"";return(0,View.jsxs)(Panel.Zp,{children:[(0,View.jsx)(Panel.l6,{options:strategies,value:selected,onChange:change=>save({fallbackStrategy:change.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===selected&&"details"]})}strategy:allStrategies[model.name]||{},onSetStrategy:next=>commit(model.name,next)';
+const aliasedClientUi = 'let choices=[{value:"fallback",label:"Fallback — try in order"},{value:"round-robin",label:"Round Robin — rotate"},{value:"fusion",label:"Fusion — panel + judge"}];function ClientCombo({strategy:settings={},combo:record,onSetStrategy:write,copied:copied}){let[shown,setShown]=(0,Hooks.useState)(!1),kind=settings.fallbackStrategy||"fallback",judge=settings.judgeModel||"";return(0,Jsx.jsxs)(Card.Zp,{children:[(0,Jsx.jsx)(Card.l6,{options:choices,value:kind,onChange:input=>write({fallbackStrategy:input.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===kind&&"details"]})}strategy:table[record.name]||{},onSetStrategy:value=>persist(record.name,value)';
+function fixture({ duplicate = false, valid = true, shadow = false, aliases = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "auto-router-patch-"));
   const server = path.join(dir, ".next/server/chunks"), serverUiDir = path.join(dir, ".next/server/app/dashboard/combos"), clientUiDir = path.join(dir, ".next/static/chunks/app/dashboard/combos");
   fs.mkdirSync(server, { recursive: true }); fs.mkdirSync(serverUiDir, { recursive: true }); fs.mkdirSync(clientUiDir, { recursive: true });
   const handler = shadow ? `${runtime("c", "f", "d", "u", "k", "e", "r")}${shadowRuntime("a", "j", "b", "f", "g")}` : `${runtime("c", "f", "d", "u", "k", "e", "r")}${nestedRuntime("a", "j", "b", "f", "g", "i", "h")}`;
   if (valid) fs.writeFileSync(path.join(server, "dynamic-handler.js"), handler);
   if (duplicate) fs.writeFileSync(path.join(server, "another-handler.js"), `${runtime("c", "f", "d", "u", "k", "e", "r")}${nestedRuntime("a", "j", "b", "f", "g", "i", "h")}`);
-  fs.writeFileSync(path.join(serverUiDir, "page.js"), serverUi); fs.writeFileSync(path.join(clientUiDir, "page-hash.js"), clientUi);
+  fs.writeFileSync(path.join(serverUiDir, "page.js"), aliases ? aliasedServerUi : serverUi); fs.writeFileSync(path.join(clientUiDir, "page-hash.js"), aliases ? aliasedClientUi : clientUi);
   return dir;
 }
 // Reproduces upstream's real shadowing: the minified resolver alias `i` is later
 // re-bound by an inner `let ...i=` in the same scope, so inlining `(0,i.d_)` at the
 // dispatch would hit a temporal-dead-zone error. The patcher must capture the alias
 // before the shadowing statement instead.
-const shadowRuntime = (body, strategy, combo, models, settings) => `exports.modules={3894:(a,b,c)=>{async function z(a,b,c,d,e){let q=await (0,i.mA)(${combo});if(!q.provider){let ${models}=await (0,i.d_)(${combo});if(${models}){let g=await (0,h.mt)(),i=g.comboStrategies||{},${strategy}=i[${combo}]?.fallbackStrategy||g.comboStrategy||"fallback";let q=g.comboStickyRoundRobinLimit;if("fusion"===${strategy})return t.info("CHAT",\`Combo "\${${combo}}" with \${${models}.length} models (strategy: fusion)\`),(0,o.vt)({body:${body},models:${models},handleSingleModel:(a,b,f)=>{let g=c;return z(a,b,g,d,e)});}}};`;
+const shadowRuntime = (body, strategy, combo, models) => `exports.modules={3894:(a,b,c)=>{async function z(a,b,c,d,e){let q=await (0,i.mA)(${combo});if(!q.provider){let ${models}=await (0,i.d_)(${combo});if(${models}){let g=await (0,h.mt)(),i=g.comboStrategies||{},${strategy}=i[${combo}]?.fallbackStrategy||g.comboStrategy||"fallback";let q=g.comboStickyRoundRobinLimit;if("fusion"===${strategy})return t.info("CHAT",\`Combo "\${${combo}}" with \${${models}.length} models (strategy: fusion)\`),(0,o.vt)({body:${body},models:${models},handleSingleModel:(a,b,f)=>{let g=c;return z(a,b,g,d,e)});}}};`;
 test("patcher dynamically discovers runtime and UI assets, patches once, and is idempotent", () => {
   const dir = fixture();
   for (let run = 0; run < 2; run += 1) assert.equal(spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" }).status, 0);
@@ -42,42 +44,43 @@ test("patcher dynamically discovers runtime and UI assets, patches once, and is 
   assert.match(patchedUi, /autoRouter/);
   assert.match(patchedUi, /easyTarget/);
   assert.match(patchedUi, /hardTarget/);
-  assert.match(patchedUi, /hardThreshold/); assert.match(patchedUi, /value:_arHard/); assert.match(patchedUi, /onChange:t=>_arSetHard\(t\.target\.value\)/); assert.match(patchedUi, /useEffect/); assert.ok(!patchedUi.includes("defaultValue:v.hardThreshold"));
-  for (const label of ["Easy target", "Hard target", "Advanced", "Hard threshold", "Long context threshold (characters)", "Large tool-result threshold (characters)", "Many-tools threshold", "Verbose logging"]) assert.ok(patchedUi.includes(label));
+  assert.match(patchedUi, /hardThreshold/); assert.match(patchedUi, /value:_arHard/); assert.match(patchedUi, /onChange:event=>_arSetHard\(event\.target\.value\)/); assert.match(patchedUi, /useEffect/); assert.ok(!patchedUi.includes("defaultValue:"));
+  for (const label of ["Easy target", "Hard target", "Advanced", "Hard threshold (default 6; recommended 4–10)", "Long context threshold (characters) (default 24000)", "Large tool-result threshold (characters) (default 12000)", "Many-tools threshold (default 16)", "Verbose logging"]) assert.ok(patchedUi.includes(label));
   assert.match(patchedUi, /availableCombos:e\.map\(t=>\(\{name:t\.name,strategy:y\[t\.name\]\|\|\{\}\}\)\)/);
-  assert.match(patchedUi, /filter\(t=>t\.name!==e\.name&&t\.strategy\.fallbackStrategy!=="auto"\)/);
+  assert.match(patchedUi, /filter\(entry=>entry\.name!==e\.name&&entry\.strategy\.fallbackStrategy!=="auto"\)/);
   assert.match(patchedUi, /missing or Auto Router — unsupported target/); assert.match(patchedUi, /disabled:!0/);
   const patchedServerUi = fs.readFileSync(path.join(dir, ".next/server/app/dashboard/combos/page.js"), "utf8");
-  for (const label of ["Easy target", "Hard target", "Advanced", "Hard threshold", "Long context threshold (characters)", "Large tool-result threshold (characters)", "Many-tools threshold", "Verbose logging"]) assert.ok(patchedServerUi.includes(label));
-  assert.match(patchedServerUi, /value:_arHard/); assert.match(patchedServerUi, /onChange:b=>_arSetHard\(b\.target\.value\)/); assert.match(patchedServerUi, /useEffect/); assert.ok(!patchedServerUi.includes("defaultValue:o.hardThreshold"));
+  for (const label of ["Easy target", "Hard target", "Advanced", "Hard threshold (default 6; recommended 4–10)", "Long context threshold (characters) (default 24000)", "Large tool-result threshold (characters) (default 12000)", "Many-tools threshold (default 16)", "Verbose logging"]) assert.ok(patchedServerUi.includes(label));
+  assert.match(patchedServerUi, /value:_arHard/); assert.match(patchedServerUi, /onChange:event=>_arSetHard\(event\.target\.value\)/); assert.match(patchedServerUi, /useEffect/); assert.ok(!patchedServerUi.includes("defaultValue:"));
   assert.match(patchedServerUi, /availableCombos:a\.map\(b=>\(\{name:b\.name,strategy:k\[b\.name\]\|\|\{\}\}\)\)/);
-  assert.match(patchedServerUi, /filter\(b=>b\.name!==a\.name&&b\.strategy\.fallbackStrategy!=="auto"\)/);
+  assert.match(patchedServerUi, /filter\(entry=>entry\.name!==a\.name&&entry\.strategy\.fallbackStrategy!=="auto"\)/);
 });
-test("patched numeric controls synchronize, validate, and save on blur", () => {
+
+test("patcher derives harmlessly renamed UI aliases from local data flow", () => {
+  const dir = fixture({ aliases: true });
+  const result = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  for (const file of [path.join(dir, ".next/server/app/dashboard/combos/page.js"), path.join(dir, ".next/static/chunks/app/dashboard/combos/page-hash.js")]) {
+    const patched = fs.readFileSync(file, "utf8");
+    assert.match(patched, /9router-auto-router-ui:v3/);
+    assert.match(patched, /label:"Auto Router"/);
+    assert.match(patched, /availableCombos:_arCombos=\[\]/);
+    assert.match(patched, /Easy target/);
+    assert.match(patched, /Hard threshold \(default 6; recommended 4–10\)/);
+  }
+});
+test("patched numeric controls synchronize, validate, save on blur, and expose defaults", () => {
   const dir = fixture();
   assert.equal(spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" }).status, 0);
-  for (const [file, config, update, setter] of [
-    [path.join(dir, ".next/server/app/dashboard/combos/page.js"), "o", "p", "_arSetHard"],
-    [path.join(dir, ".next/static/chunks/app/dashboard/combos/page-hash.js"), "v", "A", "_arSetHard"],
-  ]) {
-    const source = fs.readFileSync(file, "utf8"), changes = [], state = { hard: "stale" };
-    const effect = source.match(new RegExp(`useEffect\\)\\(\\(\\)=>\\{([^}]*)\\},\\[${config}\\.hardThreshold,${config}\\.longContextChars,${config}\\.largeToolResultChars,${config}\\.manyTools\\]`));
-    const handlers = source.match(new RegExp(`onChange:([a-z])=>${setter}\\(\\1\\.target\\.value\\),onBlur:\\1=>\\{([^}]*)\\}`));
-    assert.ok(effect && handlers, `extract ${config} numeric behavior`);
-    const runEffect = new Function(config, setter, "_arSetContext", "_arSetToolResult", "_arSetTools", effect[1]);
-    const setHard = (value) => { state.hard = value; };
-    runEffect({ hardThreshold: 11, longContextChars: 24000, largeToolResultChars: 12000, manyTools: 16 }, setHard, () => {}, () => {}, () => {});
-    assert.equal(state.hard, "11");
-    const onChange = new Function(setter, `return ${handlers[1]}=>${setter}(${handlers[1]}.target.value)`)(setHard);
-    const onBlur = new Function(config, update, setter, `return ${handlers[1]}=>{${handlers[2]}}`)({ hardThreshold: 11 }, (key, value) => changes.push({ key, value }), setHard);
-    onChange({ target: { value: "8" } });
-    assert.equal(state.hard, "8");
-    onBlur({ target: { value: "8" } });
-    assert.deepEqual(changes, [{ key: "hardThreshold", value: 8 }]);
-    onChange({ target: { value: "0" } });
-    onBlur({ target: { value: "0" } });
-    assert.equal(state.hard, "11");
-    assert.equal(changes.length, 1);
+  for (const file of [path.join(dir, ".next/server/app/dashboard/combos/page.js"), path.join(dir, ".next/static/chunks/app/dashboard/combos/page-hash.js")]) {
+    const source = fs.readFileSync(file, "utf8");
+    assert.match(source, /useEffect\)\(\(\)=>\{_arSetHard\(String\(_arConfig\.hardThreshold\|\|6\)\)/);
+    assert.match(source, /onChange:event=>_arSetHard\(event\.target\.value\),onBlur:event=>\{const value=Number\(event\.target\.value\);if\(Number\.isSafeInteger\(value\)&&value>0\)_arUpdate\("hardThreshold",value\);else _arSetHard\(String\(_arConfig\.hardThreshold\|\|6\)\)\}/);
+    assert.match(source, /Hard threshold \(default 6; recommended 4–10\)/);
+    assert.match(source, /Long context threshold \(characters\) \(default 24000\)/);
+    assert.match(source, /Large tool-result threshold \(characters\) \(default 12000\)/);
+    assert.match(source, /Many-tools threshold \(default 16\)/);
+    assert.doesNotMatch(source, /defaultValue:/);
   }
 });
 
@@ -127,6 +130,31 @@ test("patcher fails closed when a fusion dispatch or required binding changes", 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /fusion dispatch anchors|data-flow validation/);
   }
+});
+
+test("patcher fails closed for ambiguous or incompatible UI component data flow", () => {
+  const cases = [
+    (source) => source.replace("function bJ", "function duplicate({combo:a,strategy:h={},onSetStrategy:i}){let l=h.fallbackStrategy||\"fallback\",m=h.judgeModel||\"\";return null}function bJ"),
+    (source) => source.replace("strategy:k[a.name]||{},onSetStrategy:b=>A(a.name,b)", "strategy:k[a.name]||{},onSetStrategy:b=>A(b,a.name)"),
+  ];
+  for (const mutate of cases) {
+    const dir = fixture();
+    const target = path.join(dir, ".next/server/app/dashboard/combos/page.js");
+    fs.writeFileSync(target, mutate(fs.readFileSync(target, "utf8")));
+    const result = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /semantic component is ambiguous|combo collection call/);
+  }
+});
+
+
+test("patcher check validates unpatched UI semantic data flow", () => {
+  const dir = fixture();
+  const target = path.join(dir, ".next/server/app/dashboard/combos/page.js");
+  fs.writeFileSync(target, fs.readFileSync(target, "utf8").replace("strategy:k[a.name]||{},onSetStrategy:b=>A(a.name,b)", "strategy:k[a.name]||{},onSetStrategy:b=>A(b,a.name)"));
+  const result = spawnSync(process.execPath, [patcher, dir, "--check"], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /combo collection call/);
 });
 
 test("patcher fails closed when UI candidates disappear", () => {

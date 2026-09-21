@@ -85,7 +85,40 @@ function discoverUiCandidates() {
   return candidates;
 }
 function verifyPatchedUi(target, source = fs.readFileSync(target, "utf8")) {
-  if (count(source, uiMarker) !== 1 || !source.includes('label:"Auto Router"') || !source.includes("autoRouter")) fail(`Patched UI integrity failed:\n  ${path.relative(appRoot, target)}`);
+  if (count(source, uiMarker) !== 1 || count(source, 'label:"Auto Router"') !== 1 || count(source, "autoRouter") < 2 || count(source, "availableCombos:") !== 2) fail(`Patched UI integrity failed:\n  ${path.relative(appRoot, target)}`);
+}
+function uniqueMatch(source, expression, name, target) {
+  const matches = [...source.matchAll(expression)];
+  if (matches.length !== 1) fail(`Auto Router UI semantic anchor is not unique (${name}):\n  ${path.relative(appRoot, target)}\n\nExpected exactly 1; found ${matches.length}.`);
+  return matches[0];
+}
+function escapePattern(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function uiPatchSpec(source, target) {
+  const selector = uniqueMatch(source, /\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*),\{options:([A-Za-z_$][\w$]*),value:([A-Za-z_$][\w$]*),onChange:([A-Za-z_$][\w$]*)=>([A-Za-z_$][\w$]*)\(\{fallbackStrategy:\5\.target\.value\}\),selectClassName:"py-1\.5 text-xs"\}\)/g, "strategy selector", target);
+  const [selectorText, jsx, , , level, , update] = selector;
+  const state = uniqueMatch(source, new RegExp(`(?:let|const)\\b[^;]*?,${escapePattern(level)}=([A-Za-z_$][\\w$]*)\\.fallbackStrategy\\|\\|"fallback",[A-Za-z_$][\\w$]*=\\1\\.judgeModel\\|\\|"";`, "g"), "strategy state", target);
+  const strategy = state[1];
+  const react = uniqueMatch(state[0], /\(0,([A-Za-z_$][\w$]*)\.useState\)\(/g, "React state hook", target)[1];
+  const propCandidates = [...source.matchAll(/function\s+[A-Za-z_$][\w$]*\(\{([\s\S]*?)\}\)\{/g)].filter((match) => {
+    const props = match[1];
+    return new RegExp(`(?:^|,)combo:([A-Za-z_$][\\w$]*)(?:,|$)`).test(props)
+      && new RegExp(`(?:^|,)strategy:${escapePattern(strategy)}=\\{\\}(?:,|$)`).test(props)
+      && new RegExp(`(?:^|,)onSetStrategy:${escapePattern(update)}(?:,|$)`).test(props);
+  });
+  if (propCandidates.length !== 1) fail(`Auto Router UI semantic component is ambiguous:\n  ${path.relative(appRoot, target)}\n\nExpected exactly 1 component connected to the selector's strategy/update data flow; found ${propCandidates.length}.`);
+  const props = propCandidates[0][1];
+  const combo = new RegExp(`(?:^|,)combo:([A-Za-z_$][\\w$]*)(?:,|$)`).exec(props)?.[1];
+  if (!combo) fail(`Auto Router UI component is missing its combo binding:\n  ${path.relative(appRoot, target)}`);
+  const call = uniqueMatch(source, new RegExp(`strategy:([A-Za-z_$][\\w$]*)\\[${escapePattern(combo)}\\.name\\]\\|\\|\\{\\},onSetStrategy:([A-Za-z_$][\\w$]*)=>[A-Za-z_$][\\w$]*\\(${escapePattern(combo)}\\.name,\\2\\)`, "g"), "combo collection call", target);
+  const [, collectionStrategies, callEvent] = call;
+  const card = uniqueMatch(source, new RegExp(`"fusion"===${escapePattern(level)}&&`, "g"), "fusion card", target)[0];
+  if (["_arConfig", "_arUpdate", "_arCombos", "_arHard"].some((name) => source.includes(name))) fail(`Auto Router UI generated binding collision:\n  ${path.relative(appRoot, target)}`);
+  return { selectorText, jsx, level, update, stateText: state[0], strategy, react, componentText: propCandidates[0][0], combo, callText: call[0], collectionStrategies, callEvent, card };
+}
+function controls(spec) {
+  const input = (label, state, setter, key, fallback, hint = "") => `(0,${spec.jsx}.jsxs)("label",{className:"grid gap-1",children:["${label}${hint}",(0,${spec.jsx}.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:${state},onChange:event=>${setter}(event.target.value),onBlur:event=>{const value=Number(event.target.value);if(Number.isSafeInteger(value)&&value>0)_arUpdate("${key}",value);else ${setter}(String(_arConfig.${key}||${fallback}))}})]})`;
+  const target = (label, key) => `(0,${spec.jsx}.jsxs)("label",{className:"grid gap-1",children:["${label}",(0,${spec.jsx}.jsxs)("select",{className:"py-1.5 text-xs",value:_arConfig.${key}||"",onChange:event=>_arUpdate("${key}",event.target.value),children:[(0,${spec.jsx}.jsx)("option",{value:"",children:"Select combo"}),...(_arConfig.${key}&&!_arCombos.some(entry=>entry.name===_arConfig.${key}&&entry.strategy.fallbackStrategy!=="auto")?[(0,${spec.jsx}.jsx)("option",{value:_arConfig.${key},disabled:!0,children:_arConfig.${key}+" (missing or Auto Router — unsupported target)"},_arConfig.${key})]:[]),..._arCombos.filter(entry=>entry.name!==${spec.combo}.name&&entry.strategy.fallbackStrategy!=="auto").map(entry=>(0,${spec.jsx}.jsx)("option",{value:entry.name,children:entry.name},entry.name))]})]})`;
+  return `(0,${spec.jsx}.jsxs)("div",{className:"mt-2 grid gap-2 text-xs",children:[${target("Easy target", "easyTarget")},${target("Hard target", "hardTarget")},(0,${spec.jsx}.jsxs)("details",{className:"rounded border border-black/5 p-2 dark:border-white/10",children:[(0,${spec.jsx}.jsx)("summary",{className:"cursor-pointer font-medium",children:"Advanced"}),(0,${spec.jsx}.jsxs)("div",{className:"mt-2 grid gap-2",children:[${input("Hard threshold", "_arHard", "_arSetHard", "hardThreshold", 6, " (default 6; recommended 4–10)")},${input("Long context threshold (characters)", "_arContext", "_arSetContext", "longContextChars", 24000, " (default 24000)")},${input("Large tool-result threshold (characters)", "_arToolResult", "_arSetToolResult", "largeToolResultChars", 12000, " (default 12000)")},${input("Many-tools threshold", "_arTools", "_arSetTools", "manyTools", 16, " (default 16)")},(0,${spec.jsx}.jsxs)("label",{className:"flex items-center gap-2",children:[(0,${spec.jsx}.jsx)("input",{type:"checkbox",checked:!!_arConfig.verbose,onChange:event=>_arUpdate("verbose",event.target.checked)}),"Verbose logging"]})]})]})]})`;
 }
 function patchUi(targets) {
   let changed = false;
@@ -96,50 +129,20 @@ function patchUi(targets) {
       continue;
     }
     if (count(source, UI_ANCHOR) !== 1) fail(`UI strategy anchor is not unique:\n  ${path.relative(appRoot, target)}`);
-    const isServer = source.includes('function bJ({combo:a,getCaps:b,activeProviders:c=[],copied:d,onCopy:e,onEdit:f,onDelete:g,strategy:h={},onSetStrategy:i})');
-    const isClient = source.includes('function g({combo:e,getCaps:t,activeProviders:s=[],copied:i,onCopy:n,onEdit:r,onDelete:o,strategy:c={},onSetStrategy:m})');
-    if (isServer === isClient) fail(`Combo UI semantic candidate is ambiguous:\n  ${path.relative(appRoot, target)}`);
-    const spec = isServer ? {
-      component: 'function bJ({combo:a,getCaps:b,activeProviders:c=[],copied:d,onCopy:e,onEdit:f,onDelete:g,strategy:h={},onSetStrategy:i})',
-      componentPatched: 'function bJ({combo:a,getCaps:b,activeProviders:c=[],copied:d,onCopy:e,onEdit:f,onDelete:g,strategy:h={},onSetStrategy:i,availableCombos:q=[]})',
-      call: 'strategy:k[a.name]||{},onSetStrategy:b=>A(a.name,b)',
-      callPatched: 'availableCombos:a.map(b=>({name:b.name,strategy:k[b.name]||{}})),strategy:k[a.name]||{},onSetStrategy:b=>A(a.name,b)',
-      state: 'let[j,k]=(0,x.useState)(!1),l=h.fallbackStrategy||"fallback",m=h.judgeModel||"";',
-      statePatched: 'let[j,k]=(0,x.useState)(!1),l=h.fallbackStrategy||"fallback",m=h.judgeModel||"",o=h.autoRouter&&typeof h.autoRouter==="object"?h.autoRouter:{},p=(key,value)=>i({autoRouter:{...o,[key]:value}}),[_arHard,_arSetHard]=(0,x.useState)(String(o.hardThreshold||6)),[_arContext,_arSetContext]=(0,x.useState)(String(o.longContextChars||24000)),[_arToolResult,_arSetToolResult]=(0,x.useState)(String(o.largeToolResultChars||12000)),[_arTools,_arSetTools]=(0,x.useState)(String(o.manyTools||16));(0,x.useEffect)(()=>{_arSetHard(String(o.hardThreshold||6));_arSetContext(String(o.longContextChars||24000));_arSetToolResult(String(o.largeToolResultChars||12000));_arSetTools(String(o.manyTools||16));},[o.hardThreshold,o.longContextChars,o.largeToolResultChars,o.manyTools]);',
-      selector: '(0,w.jsx)(bA.l6,{options:bI,value:l,onChange:a=>i({fallbackStrategy:a.target.value}),selectClassName:"py-1.5 text-xs"})',
-      level: 'l',
-      autoCard: '"auto"===l&&(0,w.jsx)("div",{className:"mt-2 text-[11px] text-text-muted",children:"Auto Router"}),',
-      jsx: 'w',
-      config: 'o', update: 'p', combo: 'a',
-      controls: '(0,w.jsxs)("div",{className:"mt-2 grid gap-2 text-xs",children:[(0,w.jsxs)("label",{className:"grid gap-1",children:["Easy target",(0,w.jsxs)("select",{className:"py-1.5 text-xs",value:o.easyTarget||"",onChange:b=>p("easyTarget",b.target.value),children:[(0,w.jsx)("option",{value:"",children:"Select combo"})...(o.easyTarget&&!q.some(b=>b.name===o.easyTarget&&b.strategy.fallbackStrategy!=="auto")?[(0,w.jsx)("option",{value:o.easyTarget,disabled:!0,children:`${o.easyTarget} (missing or Auto Router — unsupported target)`},o.easyTarget)]:[]),...q.filter(b=>b.name!==a.name&&b.strategy.fallbackStrategy!=="auto").map(b=>(0,w.jsx)("option",{value:b.name,children:b.name},b.name))]})]}),(0,w.jsxs)("label",{className:"grid gap-1",children:["Hard target",(0,w.jsxs)("select",{className:"py-1.5 text-xs",value:o.hardTarget||"",onChange:b=>p("hardTarget",b.target.value),children:[(0,w.jsx)("option",{value:"",children:"Select combo"})...(o.hardTarget&&!q.some(b=>b.name===o.hardTarget&&b.strategy.fallbackStrategy!=="auto")?[(0,w.jsx)("option",{value:o.hardTarget,disabled:!0,children:`${o.hardTarget} (missing or Auto Router — unsupported target)`},o.hardTarget)]:[]),...q.filter(b=>b.name!==a.name&&b.strategy.fallbackStrategy!=="auto").map(b=>(0,w.jsx)("option",{value:b.name,children:b.name},b.name))]})]}),(0,w.jsxs)("details",{className:"rounded border border-black/5 p-2 dark:border-white/10",children:[(0,w.jsx)("summary",{className:"cursor-pointer font-medium",children:"Advanced"}),(0,w.jsxs)("div",{className:"mt-2 grid gap-2",children:[(0,w.jsxs)("label",{className:"grid gap-1",children:["Hard threshold",(0,w.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:_arHard,onChange:b=>_arSetHard(b.target.value),onBlur:b=>{const c=Number(b.target.value);if(Number.isSafeInteger(c)&&c>0)p("hardThreshold",c);else _arSetHard(String(o.hardThreshold||6))}})]}),(0,w.jsxs)("label",{className:"grid gap-1",children:["Long context threshold (characters)",(0,w.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:_arContext,onChange:b=>_arSetContext(b.target.value),onBlur:b=>{const c=Number(b.target.value);if(Number.isSafeInteger(c)&&c>0)p("longContextChars",c);else _arSetContext(String(o.longContextChars||24000))}})]}),(0,w.jsxs)("label",{className:"grid gap-1",children:["Large tool-result threshold (characters)",(0,w.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:_arToolResult,onChange:b=>_arSetToolResult(b.target.value),onBlur:b=>{const c=Number(b.target.value);if(Number.isSafeInteger(c)&&c>0)p("largeToolResultChars",c);else _arSetToolResult(String(o.largeToolResultChars||12000))}})]}),(0,w.jsxs)("label",{className:"grid gap-1",children:["Many-tools threshold",(0,w.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:_arTools,onChange:b=>_arSetTools(b.target.value),onBlur:b=>{const c=Number(b.target.value);if(Number.isSafeInteger(c)&&c>0)p("manyTools",c);else _arSetTools(String(o.manyTools||16))}})]}),(0,w.jsxs)("label",{className:"flex items-center gap-2",children:[(0,w.jsx)("input",{type:"checkbox",checked:!!o.verbose,onChange:b=>p("verbose",b.target.checked)}),"Verbose logging"]})]})]})]})',
-    } : {
-      component: 'function g({combo:e,getCaps:t,activeProviders:s=[],copied:i,onCopy:n,onEdit:r,onDelete:o,strategy:c={},onSetStrategy:m})',
-      componentPatched: 'function g({combo:e,getCaps:t,activeProviders:s=[],copied:i,onCopy:n,onEdit:r,onDelete:o,strategy:c={},onSetStrategy:m,availableCombos:q=[]})',
-      call: 'strategy:y[e.name]||{},onSetStrategy:t=>_(e.name,t)',
-      callPatched: 'availableCombos:e.map(t=>({name:t.name,strategy:y[t.name]||{}})),strategy:y[e.name]||{},onSetStrategy:t=>_(e.name,t)',
-      state: 'let[x,p]=(0,a.useState)(!1),u=c.fallbackStrategy||"fallback",h=c.judgeModel||"";',
-      statePatched: 'let[x,p]=(0,a.useState)(!1),u=c.fallbackStrategy||"fallback",h=c.judgeModel||"",v=c.autoRouter&&typeof c.autoRouter==="object"?c.autoRouter:{},A=(key,value)=>m({autoRouter:{...v,[key]:value}}),[_arHard,_arSetHard]=(0,a.useState)(String(v.hardThreshold||6)),[_arContext,_arSetContext]=(0,a.useState)(String(v.longContextChars||24000)),[_arToolResult,_arSetToolResult]=(0,a.useState)(String(v.largeToolResultChars||12000)),[_arTools,_arSetTools]=(0,a.useState)(String(v.manyTools||16));(0,a.useEffect)(()=>{_arSetHard(String(v.hardThreshold||6));_arSetContext(String(v.longContextChars||24000));_arSetToolResult(String(v.largeToolResultChars||12000));_arSetTools(String(v.manyTools||16));},[v.hardThreshold,v.longContextChars,v.largeToolResultChars,v.manyTools]);',
-      selector: '(0,l.jsx)(d.l6,{options:f,value:u,onChange:e=>m({fallbackStrategy:e.target.value}),selectClassName:"py-1.5 text-xs"})',
-      level: 'u',
-      autoCard: '"auto"===u&&(0,l.jsx)("div",{className:"mt-2 text-[11px] text-text-muted",children:"Auto Router"}),',
-      jsx: 'l',
-      config: 'v', update: 'A', combo: 'e',
-      controls: '(0,l.jsxs)("div",{className:"mt-2 grid gap-2 text-xs",children:[(0,l.jsxs)("label",{className:"grid gap-1",children:["Easy target",(0,l.jsxs)("select",{className:"py-1.5 text-xs",value:v.easyTarget||"",onChange:t=>A("easyTarget",t.target.value),children:[(0,l.jsx)("option",{value:"",children:"Select combo"})...(v.easyTarget&&!q.some(t=>t.name===v.easyTarget&&t.strategy.fallbackStrategy!=="auto")?[(0,l.jsx)("option",{value:v.easyTarget,disabled:!0,children:`${v.easyTarget} (missing or Auto Router — unsupported target)`},v.easyTarget)]:[]),...q.filter(t=>t.name!==e.name&&t.strategy.fallbackStrategy!=="auto").map(t=>(0,l.jsx)("option",{value:t.name,children:t.name},t.name))]})]}),(0,l.jsxs)("label",{className:"grid gap-1",children:["Hard target",(0,l.jsxs)("select",{className:"py-1.5 text-xs",value:v.hardTarget||"",onChange:t=>A("hardTarget",t.target.value),children:[(0,l.jsx)("option",{value:"",children:"Select combo"})...(v.hardTarget&&!q.some(t=>t.name===v.hardTarget&&t.strategy.fallbackStrategy!=="auto")?[(0,l.jsx)("option",{value:v.hardTarget,disabled:!0,children:`${v.hardTarget} (missing or Auto Router — unsupported target)`},v.hardTarget)]:[]),...q.filter(t=>t.name!==e.name&&t.strategy.fallbackStrategy!=="auto").map(t=>(0,l.jsx)("option",{value:t.name,children:t.name},t.name))]})]}),(0,l.jsxs)("details",{className:"rounded border border-black/5 p-2 dark:border-white/10",children:[(0,l.jsx)("summary",{className:"cursor-pointer font-medium",children:"Advanced"}),(0,l.jsxs)("div",{className:"mt-2 grid gap-2",children:[(0,l.jsxs)("label",{className:"grid gap-1",children:["Hard threshold",(0,l.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:_arHard,onChange:t=>_arSetHard(t.target.value),onBlur:t=>{const s=Number(t.target.value);if(Number.isSafeInteger(s)&&s>0)A("hardThreshold",s);else _arSetHard(String(v.hardThreshold||6))}})]}),(0,l.jsxs)("label",{className:"grid gap-1",children:["Long context threshold (characters)",(0,l.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:_arContext,onChange:t=>_arSetContext(t.target.value),onBlur:t=>{const s=Number(t.target.value);if(Number.isSafeInteger(s)&&s>0)A("longContextChars",s);else _arSetContext(String(v.longContextChars||24000))}})]}),(0,l.jsxs)("label",{className:"grid gap-1",children:["Large tool-result threshold (characters)",(0,l.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:_arToolResult,onChange:t=>_arSetToolResult(t.target.value),onBlur:t=>{const s=Number(t.target.value);if(Number.isSafeInteger(s)&&s>0)A("largeToolResultChars",s);else _arSetToolResult(String(v.largeToolResultChars||12000))}})]}),(0,l.jsxs)("label",{className:"grid gap-1",children:["Many-tools threshold",(0,l.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:_arTools,onChange:t=>_arSetTools(t.target.value),onBlur:t=>{const s=Number(t.target.value);if(Number.isSafeInteger(s)&&s>0)A("manyTools",s);else _arSetTools(String(v.manyTools||16))}})]}),(0,l.jsxs)("label",{className:"flex items-center gap-2",children:[(0,l.jsx)("input",{type:"checkbox",checked:!!v.verbose,onChange:t=>A("verbose",t.target.checked)}),"Verbose logging"]})]})]})]})',
-    };
-    for (const [name, value] of [["component", spec.component], ["call", spec.call], ["state", spec.state], ["selector", spec.selector]]) if (count(source, value) !== 1) fail(`Auto Router UI semantic anchor is not unique (${name}):\n  ${path.relative(appRoot, target)}`);
-    source = source.replace(spec.component, spec.componentPatched).replace(spec.call, spec.callPatched).replace(spec.state, spec.statePatched);
-    const rendered = `(0,${spec.jsx}.jsxs)("div",{children:[${spec.selector},"auto"===${spec.level}&&${spec.controls}]})`;
-    source = source.replace(spec.selector, rendered);
-    const card = `"fusion"===${spec.level}&&`;
-    if (count(source, card) !== 1) fail(`Auto Router card label anchor is not unique:\n  ${path.relative(appRoot, target)}`);
-    source = source.replace(card, `${spec.autoCard}${card}`);
-    source = source.replace(UI_ANCHOR, `${UI_PATCH}/* ${uiMarker} */`);
-    if (count(source, uiMarker) !== 1 || !source.includes('label:"Auto Router"') || !source.includes("autoRouter") || !source.includes("availableCombos:")) fail(`UI patch integrity failed:\n  ${path.relative(appRoot, target)}`);
+    const spec = uiPatchSpec(source, target);
+    const componentPatched = spec.componentText.replace(`onSetStrategy:${spec.update}`, `onSetStrategy:${spec.update},availableCombos:_arCombos=[]`);
+    if (componentPatched === spec.componentText) fail(`Auto Router UI component props could not be extended:\n  ${path.relative(appRoot, target)}`);
+    const callPatched = `availableCombos:${spec.combo}.map(${spec.callEvent}=>({name:${spec.callEvent}.name,strategy:${spec.collectionStrategies}[${spec.callEvent}.name]||{}})),${spec.callText}`;
+    const statePatched = `${spec.stateText}const _arConfig=${spec.strategy}.autoRouter&&typeof ${spec.strategy}.autoRouter==="object"?${spec.strategy}.autoRouter:{},_arUpdate=(key,value)=>${spec.update}({autoRouter:{..._arConfig,[key]:value}}),[_arHard,_arSetHard]=(0,${spec.react}.useState)(String(_arConfig.hardThreshold||6)),[_arContext,_arSetContext]=(0,${spec.react}.useState)(String(_arConfig.longContextChars||24000)),[_arToolResult,_arSetToolResult]=(0,${spec.react}.useState)(String(_arConfig.largeToolResultChars||12000)),[_arTools,_arSetTools]=(0,${spec.react}.useState)(String(_arConfig.manyTools||16));(0,${spec.react}.useEffect)(()=>{_arSetHard(String(_arConfig.hardThreshold||6));_arSetContext(String(_arConfig.longContextChars||24000));_arSetToolResult(String(_arConfig.largeToolResultChars||12000));_arSetTools(String(_arConfig.manyTools||16));},[_arConfig.hardThreshold,_arConfig.longContextChars,_arConfig.largeToolResultChars,_arConfig.manyTools]);`;
+    const rendered = `(0,${spec.jsx}.jsxs)("div",{children:[${spec.selectorText},"auto"===${spec.level}&&${controls(spec)}]})`;
+    source = source.replace(spec.componentText, componentPatched).replace(spec.callText, callPatched).replace(spec.stateText, statePatched).replace(spec.selectorText, rendered).replace(spec.card, `"auto"===${spec.level}&&(0,${spec.jsx}.jsx)("div",{className:"mt-2 text-[11px] text-text-muted",children:"Auto Router"}),${spec.card}`).replace(UI_ANCHOR, `${UI_PATCH}/* ${uiMarker} */`);
+    verifyPatchedUi(target, source);
     fs.writeFileSync(target, source);
     changed = true;
   }
   return changed;
 }
+
 
 const runtime = discoverRuntimeCandidate();
 const ui = discoverUiCandidates();
@@ -150,6 +153,7 @@ if (checkOnly) {
   for (const target of ui) {
     const source = fs.readFileSync(target, "utf8");
     if (source.includes(uiMarker)) verifyPatchedUi(target, source);
+    else uiPatchSpec(source, target);
   }
   console.log(`9Router Auto Router compatibility check passed: runtime=${path.relative(appRoot, runtime)} ui=${ui.map((file) => path.relative(appRoot, file)).join(",")}`);
 } else {

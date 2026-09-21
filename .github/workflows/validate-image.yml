@@ -39,6 +39,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          cache: npm
+      - run: npm ci
       - name: Validate immutable upstream digest and local image tag
         env:
           RESOLVED_UPSTREAM_DIGEST: ${{ inputs.upstream_digest }}
@@ -78,6 +80,11 @@ jobs:
             --build-arg UPSTREAM_VERSION="$UPSTREAM_VERSION" \
             --build-arg BUILD_CREATED="$(date --utc +%Y-%m-%dT%H:%M:%SZ)" \
             --tag "${{ inputs.image_tag }}" .
+      - name: Verify the built derived image
+        env:
+          REVISION: ${{ steps.metadata.outputs.revision }}
+          UPSTREAM_DIGEST: ${{ steps.metadata.outputs.upstream_digest }}
+        run: ./scripts/verify-built-image.sh "${{ inputs.image_tag }}" "$REVISION" "$UPSTREAM_DIGEST"
       - run: ./scripts/smoke-test.sh "${{ inputs.image_tag }}"
       - run: ./scripts/runtime-test.sh "${{ inputs.image_tag }}"
       - run: ./scripts/settings-persistence-test.sh "${{ inputs.image_tag }}"

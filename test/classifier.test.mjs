@@ -39,6 +39,38 @@ test("short simple prompt and small single-file edit are easy", () => {
   assert.equal(classifyTaskComplexity(message("What is a JavaScript closure?")).level, "easy");
   assert.equal(classifyTaskComplexity(message("Update src/index.js to rename one function.")).level, "easy");
 });
+
+test("continue only becomes hard from substantial actual history, not old semantic words", () => {
+  const trivial = { messages: [{ role: "user", content: "Rename one label." }, { role: "assistant", content: "Done." }, { role: "user", content: "continue" }] };
+  assert.equal(classifyTaskComplexity(trivial).level, "easy");
+
+  const semanticOnly = { messages: [
+    ...Array.from({ length: 12 }, () => ({ role: "user", content: "Fully audit security architecture migration." })),
+    { role: "user", content: "continue" },
+  ] };
+  assert.equal(classifyTaskComplexity(semanticOnly).level, "easy");
+
+  const worked = { messages: [{ role: "user", content: "Investigate the production incident." }] };
+  for (let index = 0; index < 8; index += 1) {
+    worked.messages.push({ role: "assistant", tool_calls: [{ id: `call-${index}` }] });
+    worked.messages.push({ role: "tool", content: "diagnostic result ".repeat(1200) });
+  }
+  worked.messages.push({ role: "user", content: "continue" });
+  assert.equal(classifyTaskComplexity(worked).level, "hard");
+});
+
+test("canonical populated request shapes have identical semantic isolation", () => {
+  const hard = "Investigate a race condition in settings persistence.";
+  const easy = "Rename the Save button.";
+  const shapes = [
+    { messages: [{ role: "user", content: easy }], input: hard, contents: [{ role: "user", parts: [{ text: hard }] }] },
+    { messages: [], input: [{ role: "user", content: [{ type: "input_text", text: easy }] }], contents: [{ role: "user", parts: [{ text: hard }] }] },
+    { messages: [], input: [], contents: [{ role: "user", parts: [{ text: easy }] }] },
+    { request: { messages: [], input: easy, contents: [{ role: "user", parts: [{ text: hard }] }] } },
+  ];
+  for (const body of shapes) assert.equal(classifyTaskComplexity(body).level, "easy");
+  for (const body of [{ messages: [] }, { input: [] }, { contents: [] }, { messages: [], input: [], contents: [] }]) assert.equal(classifyTaskComplexity(body).level, "hard");
+});
 test("realistic OpenHands toolset does not make a simple request hard", () => {
   const body = harness("Rename this variable in src/foo.js");
   const result = classifyTaskComplexity(body);

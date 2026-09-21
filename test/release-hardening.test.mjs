@@ -41,3 +41,37 @@ test("publish gates latest on both current source and current upstream digest be
   assert.match(publish, /skip latest until a new run validates it/);
   assert.match(publish, /if: steps\.current\.outputs\.publish == 'true'/);
 });
+
+test("validation installs cached dependencies before static checks", () => {
+  const validate = workflows.find(([file]) => file === "validate-image.yml")?.[1] || "";
+  const setup = validate.indexOf("actions/setup-node@");
+  const install = validate.indexOf("- run: npm ci");
+  const check = validate.indexOf("- run: npm run check");
+  const tests = validate.indexOf("- run: npm test");
+  assert.ok(setup >= 0 && setup < install && install < check && check < tests);
+  assert.match(validate, /node-version: 22\n\s+cache: npm/);
+});
+
+test("derived image verification precedes every image integration test", () => {
+  const validate = workflows.find(([file]) => file === "validate-image.yml")?.[1] || "";
+  const verification = validate.indexOf("Verify the built derived image");
+  const smoke = validate.indexOf("./scripts/smoke-test.sh");
+  const runtime = validate.indexOf("./scripts/runtime-test.sh");
+  const persistence = validate.indexOf("./scripts/settings-persistence-test.sh");
+  const http = validate.indexOf("./scripts/auto-router-http-test.sh");
+  assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http);
+  assert.match(validate, /verify-built-image\.sh "\$\{\{ inputs\.image_tag \}\}" "\$REVISION" "\$UPSTREAM_DIGEST"/);
+  const verifier = fs.readFileSync(path.join(root, "scripts/verify-built-image.sh"), "utf8");
+  for (const required of ["auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v3", "Easy target", "Hard target", "org.opencontainers.image.revision", "upstream.digest", "availableCombos:"]) assert.ok(verifier.includes(required));
+  for (const cardinality of ['label:\\"Auto Router\\"', "9router-auto-router-ui:v3", "Easy target", "Hard target"]) assert.ok(verifier.includes(`grep -o "${cardinality}" "$file" | wc -l`));
+  assert.doesNotMatch(verifier, /page-hash|app\/dashboard\/combos\/page/);
+});
+
+test("lint blocks warnings and restricts CommonJS globals to runtime code", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  assert.match(manifest.scripts.lint, /eslint eslint\.config\.js src patches test --max-warnings=0/);
+  const config = fs.readFileSync(path.join(root, "eslint.config.js"), "utf8");
+  assert.match(config, /files: \["eslint\.config\.js", "patches\/\*\*\/\*\.mjs", "test\/\*\*\/\*\.mjs"\]/);
+  assert.match(config, /files: \["src\/\*\*\/\*\.cjs"\]/);
+  assert.match(config, /sourceType: "commonjs"/);
+});
