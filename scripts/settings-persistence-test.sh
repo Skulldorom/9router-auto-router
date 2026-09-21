@@ -3,51 +3,45 @@ set -eu
 
 IMAGE="${1:-9router-auto-router:persistence}"
 NAME="9router-auto-router-settings-$$"
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$ROOT/scripts/lib-container-test.sh"
 DATA_DIR=$(mktemp -d)
-COOKIE_JAR="$DATA_DIR/cookies.txt"
+WORK_DIR=$(mktemp -d)
+# Keep the cookie jar off the bind mount: the image entrypoint chowns /app/data to
+# its runtime user, which would otherwise make the runner-owned jar unwritable.
+COOKIE_JAR="$WORK_DIR/cookies.txt"
 PASSWORD="auto-router-integration-password"
 OWNER_UID=$(id -u)
 OWNER_GID=$(id -g)
+RUNTIME_USER=$(container_runtime_user "$IMAGE")
 
 cleanup() {
   status=$?
   trap - EXIT INT TERM
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  if [ -d "$DATA_DIR" ] && ! rmdir "$DATA_DIR" 2>/dev/null; then
-    docker run --rm --user 0:0 --entrypoint /bin/sh -v "$DATA_DIR:/cleanup" "$IMAGE" \
-      -c 'find /cleanup -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; chown "$1:$2" /cleanup' -- "$OWNER_UID" "$OWNER_GID" || true
-    if ! rmdir "$DATA_DIR"; then
-      echo "Settings persistence test cleanup failed: could not remove $DATA_DIR." >&2
-      [ "$status" -ne 0 ] && exit "$status"
-      exit 1
-    fi
+  rm -rf "$WORK_DIR" 2>/dev/null || true
+  if ! purge_dir "$IMAGE" "$DATA_DIR" "$OWNER_UID" "$OWNER_GID"; then
+    echo "Settings persistence test cleanup failed: could not remove $DATA_DIR." >&2
+    [ "$status" -ne 0 ] && exit "$status"
+    exit 1
   fi
   exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-chmod 777 "$DATA_DIR"
+
+# Prepare the bind mount for the image's actual runtime user, not a guessed UID.
+prepare_data_dir "$IMAGE" "$DATA_DIR" "$RUNTIME_USER"
 
 start() {
   docker run -d --name "$NAME" -v "$DATA_DIR:/app/data" -e NODE_ENV=production -e INITIAL_PASSWORD="$PASSWORD" -p 127.0.0.1::20128 "$IMAGE" >/dev/null
   PORT=$(docker port "$NAME" 20128/tcp | sed 's/.*://')
-  attempt=0
-  while [ "$attempt" -lt 30 ]; do
-    status=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:${PORT}/api/auth/login" || true)
-    [ "$status" != 000 ] && return 0
-    attempt=$((attempt + 1))
-    sleep 1
-  done
-  docker logs "$NAME" >&2 || true
-  echo "Settings persistence test failed: ${IMAGE} did not start." >&2
-  exit 1
-}
-
-login() {
-  curl --fail --silent --show-error --cookie "$COOKIE_JAR" --cookie-jar "$COOKIE_JAR" \
-    -H 'Content-Type: application/json' --data "{\"password\":\"${PASSWORD}\"}" \
-    "http://127.0.0.1:${PORT}/api/auth/login" >/dev/null
+  if ! wait_for_login "http://127.0.0.1:${PORT}/api/auth/login" "$COOKIE_JAR" "$PASSWORD" 60; then
+    dump_container_logs "$NAME"
+    echo "Settings persistence test failed: login did not succeed (last status ${last_status:-none})." >&2
+    exit 1
+  fi
 }
 
 assert_settings() {
@@ -67,11 +61,9 @@ assert_settings() {
 
 PAYLOAD='{"comboStrategies":{"coder-auto":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"coder","hardTarget":"coder-high","hardThreshold":6,"longContextChars":24000,"largeToolResultChars":12000,"manyTools":16,"verbose":false}},"chat-auto":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"chat","hardTarget":"chat-high","hardThreshold":9,"longContextChars":30000,"largeToolResultChars":15000,"manyTools":20,"verbose":true}}}}'
 start
-login
 curl --fail --silent --show-error --cookie "$COOKIE_JAR" --cookie-jar "$COOKIE_JAR" -X PATCH -H 'Content-Type: application/json' --data "$PAYLOAD" "http://127.0.0.1:${PORT}/api/settings" >/dev/null
 assert_settings
 docker rm -f "$NAME" >/dev/null
 start
-login
 assert_settings
 echo "Settings persistence test passed: API save/reload survives a container restart using the same /app/data."

@@ -77,18 +77,18 @@ jobs:
       - name: Unit, classifier, and routing tests
         run: npm test
       - id: metadata
-        name: Resolve and pull immutable upstream image
+        name: Pull selected immutable upstream image
+        env:
+          RESOLVED_UPSTREAM_DIGEST: ${{ needs.should-build.outputs.upstream_digest }}
         run: |
           set -eu
-          docker buildx imagetools inspect "$UPSTREAM_IMAGE" > upstream-inspect.txt
-          digest=$(sed -n 's/^Digest:[[:space:]]*//p' upstream-inspect.txt | head -n1)
-          test -n "$digest"
-          immutable_image="decolua/9router@${digest}"
+          test -n "$RESOLVED_UPSTREAM_DIGEST"
+          immutable_image="decolua/9router@${RESOLVED_UPSTREAM_DIGEST}"
           docker pull "$immutable_image"
           version=$(docker image inspect "$immutable_image" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')
           [ -n "$version" ] || version=unknown
-          printf 'revision=%s\nupstream_digest=%s\nupstream_version=%s\n' "$GITHUB_SHA" "$digest" "$version" >> "$GITHUB_OUTPUT"
-          printf 'UPSTREAM_IMAGE=%s\nUPSTREAM_DIGEST=%s\nUPSTREAM_VERSION=%s\n' "$immutable_image" "$digest" "$version" >> "$GITHUB_ENV"
+          printf 'revision=%s\nupstream_digest=%s\nupstream_version=%s\n' "$GITHUB_SHA" "$RESOLVED_UPSTREAM_DIGEST" "$version" >> "$GITHUB_OUTPUT"
+          printf 'UPSTREAM_IMAGE=%s\nUPSTREAM_DIGEST=%s\nUPSTREAM_VERSION=%s\n' "$immutable_image" "$RESOLVED_UPSTREAM_DIGEST" "$version" >> "$GITHUB_ENV"
       - name: Compatibility check against the immutable upstream image
         run: ./scripts/check-upstream-compatibility.sh
       - name: Build derived image from the validated immutable upstream image
@@ -107,6 +107,8 @@ jobs:
         run: ./scripts/runtime-test.sh 9router-auto-router:validated
       - name: Settings persistence integration test
         run: ./scripts/settings-persistence-test.sh 9router-auto-router:validated
+      - name: Auto Router production HTTP integration test
+        run: ./scripts/auto-router-http-test.sh 9router-auto-router:validated
       - name: Save validated image for the publish job
         run: docker save 9router-auto-router:validated | gzip > validated-image.tar.gz
       - uses: actions/upload-artifact@v7
