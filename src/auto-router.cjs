@@ -31,6 +31,7 @@ const WEAK_DOMAIN_TERMS = Object.freeze([
 const STRONG_TERMS = new Set(STRONG_TASK_PHRASES.flatMap((group) => group.terms));
 const WEAK_TERMS = new Set([...GATED_STRUCTURAL_TERMS, ...WEAK_DOMAIN_TERMS].flatMap((group) => group.terms));
 const HARD_TERMS = [...STRONG_TERMS, ...WEAK_TERMS];
+const PUNCTUATED_PHRASES = new Set(HARD_TERMS.filter((term) => /\s/u.test(term)).map((term) => term.toLocaleLowerCase()));
 const STRONG_WEIGHT = 6;
 // Gated structural work ("plan a database migration") carries full weight once task
 // language is present; a lone security/architecture noun stays sub-threshold.
@@ -165,44 +166,70 @@ function inspectRequest(body) {
   return state;
 }
 function normalizeTools(body) { return Array.isArray(own(body, "tools")) ? own(body, "tools") : Array.isArray(own(body, "functions")) ? own(body, "functions") : []; }
+function addIntentChunk(tokens, chunk, quoted) {
+  const normalized = chunk.toLocaleLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+  if (!normalized) return;
+  // Paths, filenames, snake_case, and camelCase identifiers stay atomic. Normal
+  // prose punctuation is split below, so `fully-audit` matches without exposing
+  // `plan` from `migration-plan.json` or an identifier such as `migrationPlan`.
+  if (/[._/\\]/u.test(normalized) || /\p{Ll}\p{M}*\p{Lu}/u.test(normalized)) {
+    tokens.push({ value: normalized, quoted });
+    return;
+  }
+  const parts = normalized.split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean);
+  const hasPunctuationSeparator = /[^\p{L}\p{N}\p{M}\s]/u.test(normalized);
+  if (hasPunctuationSeparator && parts.length > 1 && !PUNCTUATED_PHRASES.has(parts.join(" "))) {
+    tokens.push({ value: normalized, quoted });
+    return;
+  }
+  for (const part of parts) tokens.push({ value: part, quoted });
+}
 function intentTokens(text) {
   const tokens = [];
-  let token = "", quote = null, escaped = false;
+  let chunk = "", quote = null, escaped = false, quoted = false;
   const flush = () => {
-    const normalized = token.toLocaleLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-    if (normalized) tokens.push(normalized);
-    token = "";
+    addIntentChunk(tokens, chunk, quoted);
+    chunk = "";
   };
   for (const character of text) {
     if (quote) {
-      if (escaped) escaped = false;
-      else if (character === "\\") escaped = true;
-      else if (character === quote) quote = null;
+      if (escaped) {
+        chunk += character;
+        escaped = false;
+      } else if (character === "\\") escaped = true;
+      else if (character === quote) {
+        flush();
+        quote = null;
+        quoted = false;
+      } else chunk += character;
       continue;
     }
     if (character === '"' || character === "`" || character === "'") {
       flush();
       quote = character;
+      quoted = true;
     } else if (/\s/u.test(character)) flush();
-    else token += character;
+    else chunk += character;
   }
   flush();
   return tokens;
 }
-function termTokens(term) { return term.toLocaleLowerCase().split(/\s+/u); }
-function hasTerm(tokens, term) {
+function termTokens(term) { return term.toLocaleLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean); }
+function hasTerm(tokens, term, allowQuoted = false) {
   const phrase = termTokens(term);
-  return tokens.some((token, index) => phrase.every((part, offset) => tokens[index + offset] === part));
+  return tokens.some((token, index) => phrase.every((part, offset) => tokens[index + offset]?.value === part && (allowQuoted || !tokens[index + offset].quoted)));
 }
 function keywordMatches(text) {
   const tokens = intentTokens(text);
-  const reasonsFor = (groups) => groups.filter((group) => group.terms.some((term) => hasTerm(tokens, term))).map((group) => group.reason);
+  const reasonsFor = (groups, allowQuoted = false) => groups.filter((group) => group.terms.some((term) => hasTerm(tokens, term, allowQuoted))).map((group) => group.reason);
   const strong = reasonsFor(STRONG_TASK_PHRASES);
   const taskOriented = TASK_ACTION_TERMS.some((term) => hasTerm(tokens, term));
   return {
     strong,
-    gated: taskOriented ? reasonsFor(GATED_STRUCTURAL_TERMS) : [],
-    weak: taskOriented ? reasonsFor(WEAK_DOMAIN_TERMS) : [],
+    // Quoted nouns remain inert by themselves. Once an unquoted action establishes
+    // task intent, quoted domain context is meaningful and receives normal weight.
+    gated: taskOriented ? reasonsFor(GATED_STRUCTURAL_TERMS, true) : [],
+    weak: taskOriented ? reasonsFor(WEAK_DOMAIN_TERMS, true) : [],
   };
 }
 

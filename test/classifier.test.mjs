@@ -97,6 +97,51 @@ test("supported request formats extract only explicit user intent", () => {
   assert.equal(classifyTaskComplexity({ input: simple }).level, "easy");
 });
 
+test("punctuation-aware phrases preserve identifier and filename safety", () => {
+  for (const prompt of [
+    "Fully audit this repository.",
+    "Fully-audit this repository.",
+    "Fully: audit this repository.",
+    "Deep review this implementation.",
+    "Deep-review this implementation.",
+    "Investigate the root cause.",
+    "Investigate the root-cause.",
+    "Debug this race condition.",
+    "Debug this race-condition.",
+    "Plan a database migration.",
+    "Trace this request through the service.",
+    "Resolve this concurrency issue.",
+  ]) assert.equal(classifyTaskComplexity(message(prompt)).level, "hard", prompt);
+  for (const prompt of [
+    "Rename the migrationPlan field.",
+    "Change ArchitecturePreview to ArchitectureView.",
+    "Update template migration-plan.json.",
+    "Rename resolveMigrationState.",
+    "Rename reviewStatus to approvalStatus.",
+    "Change auditLabel to activityLabel.",
+    "Rename the review-status field.",
+  ]) assert.equal(classifyTaskComplexity(message(prompt)).level, "easy", prompt);
+});
+
+test("unquoted actions can score quoted domain context without scoring quoted labels", () => {
+  for (const prompt of [
+    'Rename "review".',
+    'Change the "audit" label.',
+    'Rename "migrationPlan".',
+    'Update "ArchitecturePreview".',
+  ]) assert.equal(classifyTaskComplexity(message(prompt)).level, "easy", prompt);
+  for (const [prompt, reason] of [
+    ['Investigate "authentication architecture" for vulnerabilities.', "architecture"],
+    ['Audit the "permissions migration" implementation.', "migration"],
+    ['Review the "security architecture".', "architecture"],
+  ]) {
+    const result = classifyTaskComplexity(message(prompt));
+    assert.equal(result.level, "hard", prompt);
+    assert.ok(result.reasons.includes(reason), prompt);
+  }
+});
+
+
 test("malformed and empty requests safely choose hard without rejecting sparse requests", () => {
   assert.equal(classifyTaskComplexity(null).level, "hard"); assert.equal(classifyTaskComplexity({}).level, "hard");
   assert.equal(classifyTaskComplexity({ model: "coder-auto", messages: [{ role: "user", content: "ok" }] }).level, "easy");

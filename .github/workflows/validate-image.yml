@@ -39,6 +39,20 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+      - name: Validate immutable upstream digest and local image tag
+        env:
+          RESOLVED_UPSTREAM_DIGEST: ${{ inputs.upstream_digest }}
+          VALIDATED_IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -eu
+          printf '%s' "$RESOLVED_UPSTREAM_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || {
+            echo "Invalid immutable upstream digest." >&2
+            exit 1
+          }
+          case "$VALIDATED_IMAGE_TAG" in
+            9router-auto-router:ci|9router-auto-router:validated) ;;
+            *) echo "Invalid local validation image tag." >&2; exit 1 ;;
+          esac
       - run: npm run check
       - run: npm test
       - id: metadata
