@@ -36,8 +36,132 @@ function dispatchAnchors(source) {
   if (new Set(anchors.map((match) => match[0])).size !== 2) fail("Runtime handler contains ambiguous duplicate fusion dispatch anchors.");
   return anchors;
 }
+function escapeRegex(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+// Structural boundaries: brace pairs with quotes and comments skipped, so discovery never
+// depends on a fixed byte distance between the Fusion anchor and its bindings.
+function delimiterPairs(source) {
+  const pairs = [], stack = [], quoted = [];
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (quoted.length) {
+      if (char === "\\") { index += 1; continue; }
+      if (char === quoted.at(-1)) quoted.pop();
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") { quoted.push(char); continue; }
+    if (char === "/" && source[index + 1] === "/") { const end = source.indexOf("\n", index); index = end < 0 ? source.length : end; continue; }
+    if (char === "/" && source[index + 1] === "*") { const end = source.indexOf("*/", index + 2); index = end < 0 ? source.length : end + 1; continue; }
+    if (char === "{") stack.push(index);
+    if (char === "}") {
+      const open = stack.pop();
+      if (open === undefined) return null;
+      pairs.push({ open, close: index });
+    }
+  }
+  return pairs;
+}
+function matchClosingParen(source, open) {
+  let depth = 0, quote = null;
+  for (let index = open; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (char === "\\") { index += 1; continue; }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") { quote = char; continue; }
+    if (char === "(") depth += 1;
+    if (char === ")" && --depth === 0) return index;
+  }
+  return -1;
+}
+function splitTopLevelProperties(content) {
+  const properties = [];
+  let start = 0, depth = 0, quote = null;
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    if (quote) {
+      if (char === "\\") { index += 1; continue; }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") { quote = char; continue; }
+    if (char === "{" || char === "(" || char === "[") { depth += 1; continue; }
+    if (char === "}" || char === ")" || char === "]") { depth -= 1; continue; }
+    if (char === "," && depth === 0) { properties.push(content.slice(start, index)); start = index + 1; }
+  }
+  properties.push(content.slice(start));
+  return properties;
+}
+// Parse the object literal that directly follows the matched Fusion branch. Property order
+// and any extra trailing properties are irrelevant; only the named bindings matter.
+function dispatchPayload(source, anchor) {
+  const start = anchor.index + anchor[0].length;
+  if (source.slice(start, start + 2) !== "({") return null;
+  const end = matchClosingParen(source, start);
+  if (end < 0) return null;
+  const fields = new Map();
+  for (const property of splitTopLevelProperties(source.slice(start + 2, end - 1))) {
+    const separator = property.indexOf(":");
+    if (separator <= 0) return null;
+    const key = property.slice(0, separator).trim();
+    if (fields.has(key)) return null;
+    fields.set(key, property.slice(separator + 1).trim());
+  }
+  const body = fields.get("body"), models = fields.get("models"), handler = fields.get("handleSingleModel");
+  if (!body || !models || !handler) return null;
+  if (!/^[A-Za-z_$][\w$]*$/.test(body) || !/^[A-Za-z_$][\w$]*$/.test(models)) return null;
+  const arrow = handler.match(/^\(([^()]*)\)=>([\s\S]*)$/);
+  if (!arrow) return null;
+  const returns = [...arrow[2].matchAll(/return ([A-Za-z_$][\w$]*)\(([^()]*)\)/g)];
+  if (returns.length !== 1) return null;
+  const forwarded = returns[0][2].split(",").map((value) => value.trim());
+  if (forwarded.some((value) => !/^[A-Za-z_$][\w$]*$/.test(value))) return null;
+  return { body, models, delegate: returns[0][1], forwarded, end };
+}
+// Associate the resolver, comboStrategies, settings, and enclosing `let` statement that
+// belong to the same dispatch path: walk enclosing brace scopes, skip any scope where the
+// data-flow pattern is not unique, and require every plan to be unambiguous.
+function structuralPlan(source, anchor, target) {
+  const payload = dispatchPayload(source, anchor);
+  if (!payload || payload.body === payload.models) return null;
+  const [, strategy, log, comboName] = anchor;
+  const pairs = delimiterPairs(source);
+  if (!pairs) fail(`Runtime handler has unbalanced structural delimiters:\n  ${path.relative(appRoot, target)}`);
+  const resolverPattern = new RegExp(`${escapeRegex(payload.models)}=await \\(0,([A-Za-z_$][\\w$]*)\\.([A-Za-z_$][\\w$]*)\\)\\(${escapeRegex(comboName)}\\)`, "g");
+  const strategyPattern = new RegExp(`(?:let |,)([A-Za-z_$][\\w$]*)=([A-Za-z_$][\\w$]*)\\.comboStrategies\\|\\|\\{\\},${escapeRegex(strategy)}=\\1\\[${escapeRegex(comboName)}\\]\\?\\.fallbackStrategy\\|\\|\\2\\.comboStrategy\\|\\|"fallback"`, "g");
+  const candidates = [];
+  for (const scope of pairs) {
+    if (scope.open >= anchor.index || scope.close < payload.end) continue;
+    const region = source.slice(scope.open + 1, scope.close);
+    const resolvers = [...region.matchAll(resolverPattern)].filter((match) => scope.open + 1 + match.index < anchor.index);
+    const bindings = [...region.matchAll(strategyPattern)].filter((match) => scope.open + 1 + match.index < anchor.index);
+    if (resolvers.length !== 1 || bindings.length !== 1) continue;
+    const resolver = resolvers[0], binding = bindings[0];
+    const resolverIndex = scope.open + 1 + resolver.index;
+    const statement = source.lastIndexOf("let ", resolverIndex);
+    if (statement <= scope.open || statement > resolverIndex) continue;
+    candidates.push({ resolver, resolverIndex, statement, strategies: binding[1], settings: binding[2] });
+  }
+  if (!candidates.length) return null;
+  const signatures = new Map();
+  for (const candidate of candidates) {
+    const signature = [candidate.resolverIndex, candidate.strategies, candidate.settings, candidate.resolver[1], candidate.resolver[2], candidate.statement].join(":");
+    if (!signatures.has(signature)) signatures.set(signature, candidate);
+  }
+  if (signatures.size !== 1) fail(`Runtime dispatch data-flow validation is ambiguous:\n  ${path.relative(appRoot, target)}\n\nExpected one resolver and combo-strategy binding structurally associated with the fusion dispatch.`);
+  const candidate = [...signatures.values()][0];
+  return { ...payload, anchor: anchor[0], strategy, log, comboName, resolver: candidate.resolver, strategies: candidate.strategies, settings: candidate.settings, statement: candidate.statement };
+}
 function verifyPatchedRuntime(target, source = fs.readFileSync(target, "utf8")) {
   if (count(source, runtimeMarker) !== 1 || count(source, "routeAutoCombo") !== 2) fail(`Patched runtime handler integrity failed:\n  ${path.relative(appRoot, target)}`);
+}
+function runtimePlans(source, target) {
+  const anchors = dispatchAnchors(source);
+  const plans = anchors.map((anchor) => structuralPlan(source, anchor, target));
+  if (plans.some((plan) => !plan)) fail(`Runtime dispatch data-flow validation failed:\n  ${path.relative(appRoot, target)}\n\nExpected body, models resolver, comboStrategies, settings, and single-model dispatch in one structural dispatch path.`);
+  if (new Set(plans.map((plan) => plan.models)).size !== plans.length) fail(`Runtime dispatch data-flow validation is ambiguous:\n  ${path.relative(appRoot, target)}\n\nFusion dispatches must have distinct model bindings.`);
+  return plans;
 }
 function patchRuntime(target) {
   let source = fs.readFileSync(target, "utf8");
@@ -45,31 +169,20 @@ function patchRuntime(target) {
     verifyPatchedRuntime(target, source);
     return false;
   }
-  const anchors = dispatchAnchors(source);
+  const plans = runtimePlans(source, target);
   source = `/* ${runtimeMarker} */${source}`;
-  for (const match of anchors) {
-    const [anchor, strategy, log, comboName] = match;
-    const index = source.indexOf(anchor);
-    const before = source.slice(Math.max(0, index - 3000), index);
-    const after = source.slice(index, index + 900);
-    const body = after.match(/\{body:([A-Za-z_$][\w$]*),models:/)?.[1];
-    const models = after.match(/\{body:[A-Za-z_$][\w$]*,models:([A-Za-z_$][\w$]*)/)?.[1];
-    // Find the models resolver call; its minified alias may be shadowed by a later inner binding.
-    const resolver = [...before.matchAll(new RegExp(`${models}=await \\(0,([A-Za-z_$][\\w$]*)\\.([A-Za-z_$][\\w$]*)\\)\\(`, "g"))].at(-1);
-    const bindings = [...before.matchAll(/(?:let |,)([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.comboStrategies\|\|\{\}/g)];
-    const strategyBinding = bindings.at(-1);
-    const strategies = strategyBinding?.[1], settings = strategyBinding?.[2];
-    const dispatch = after.match(/handleSingleModel:\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)=>[\s\S]*?return ([A-Za-z_$][\w$]*)\(([^()]*)\)/);
-    const statement = resolver ? before.lastIndexOf("let ", resolver.index) : -1;
-    if (!body || !models || !resolver || !strategies || !settings || !dispatch || body === models || statement < 0) fail(`Runtime dispatch data-flow validation failed:\n  ${path.relative(appRoot, target)}\n\nExpected body, models resolver, comboStrategies, settings, and single-model dispatch near fusion dispatch.`);
-    const capture = `_arResolve${models}`;
+  for (const plan of plans.sort((left, right) => right.statement - left.statement)) {
+    const capture = `_arResolve${plan.models}`;
     if (source.includes(capture)) fail(`Runtime dispatch data-flow validation failed:\n  ${path.relative(appRoot, target)}\n\nUnexpected resolver capture name collision.`);
-    const captureIndex = index - before.length + statement;
-    source = `${source.slice(0, captureIndex)}const ${capture}=(0,${resolver[1]}.${resolver[2]});${source.slice(captureIndex)}`;
-    const forwarded = dispatch[5].split(",").map((value) => value.trim());
+    const insertion = plan.statement + `/* ${runtimeMarker} */`.length;
+    source = `${source.slice(0, insertion)}const ${capture}=(0,${plan.resolver[1]}.${plan.resolver[2]});${source.slice(insertion)}`;
+    const anchorIndex = source.indexOf(plan.anchor);
+    if (anchorIndex < 0) fail(`Runtime dispatch anchor disappeared while patching:\n  ${path.relative(appRoot, target)}`);
+    const forwarded = [...plan.forwarded];
+    if (forwarded.length < 2) fail(`Runtime dispatch data-flow validation failed:\n  ${path.relative(appRoot, target)}\n\nSingle-model dispatch forwards insufficient arguments.`);
     forwarded[0] = "nextBody"; forwarded[1] = "target";
-    const patch = `if("auto"===${strategy})return require("/opt/9router-auto-router/auto-router.cjs").routeAutoCombo({body:${body},comboName:${comboName},comboStrategies:${strategies},globalStrategy:${settings}.comboStrategy,log:${log},targetExists:async(name)=>Boolean(await ${capture}(name)),delegate:(nextBody,target)=>${dispatch[4]}(${forwarded.join(",")})});`;
-    source = source.replace(anchor, `${patch}${anchor}`);
+    const patch = `if("auto"===${plan.strategy})return require("/opt/9router-auto-router/auto-router.cjs").routeAutoCombo({body:${plan.body},comboName:${plan.comboName},comboStrategies:${plan.strategies},globalStrategy:${plan.settings}.comboStrategy,log:${plan.log},targetExists:async(name)=>Boolean(await ${capture}(name)),delegate:(nextBody,target)=>${plan.delegate}(${forwarded.join(",")})});`;
+    source = `${source.slice(0, anchorIndex)}${patch}${source.slice(anchorIndex)}`;
   }
   if (count(source, runtimeMarker) !== 1 || count(source, "routeAutoCombo") !== 2) fail(`Runtime patch integrity failed:\n  ${path.relative(appRoot, target)}`);
   fs.writeFileSync(target, source);
@@ -149,7 +262,7 @@ const ui = discoverUiCandidates();
 if (checkOnly) {
   const runtimeSource = fs.readFileSync(runtime, "utf8");
   if (runtimeSource.includes(runtimeMarker)) verifyPatchedRuntime(runtime, runtimeSource);
-  else dispatchAnchors(runtimeSource);
+  else runtimePlans(runtimeSource, runtime);
   for (const target of ui) {
     const source = fs.readFileSync(target, "utf8");
     if (source.includes(uiMarker)) verifyPatchedUi(target, source);

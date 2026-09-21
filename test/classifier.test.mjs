@@ -453,6 +453,30 @@ test("runtime target validation returns controlled easy and hard stale-target er
   }
 });
 
+test("target resolver failures are not misreported as missing targets", async () => {
+  const log = { info() {}, warn() {} };
+  const comboStrategies = { auto: { autoRouter: { easyTarget: "coder", hardTarget: "coder-high" } } };
+  // Resolver success delegates normally and forwards the chosen target.
+  const delegated = [];
+  const ok = await routeAutoCombo({ body: message("hello"), comboName: "auto", comboStrategies, log, targetExists: async () => true, delegate: (sent, target) => { delegated.push({ sent, target }); return new Response("ok"); } });
+  assert.equal(ok.status, 200); assert.equal(await ok.text(), "ok"); assert.equal(delegated.length, 1); assert.equal(delegated[0].target, "coder");
+  for (const [name, targetExists] of [
+    ["synchronous", () => { throw new Error("resolver exploded"); }],
+    ["asynchronous", async () => { throw new Error("resolver exploded"); }],
+  ]) {
+    const body = message("hello");
+    await assert.rejects(
+      routeAutoCombo({ body, comboName: "auto", comboStrategies, log, targetExists, delegate: () => new Response("unexpected") }),
+      /resolver exploded/,
+      `${name} resolver failure must propagate`,
+    );
+    // The failed attempt must not leave request/recursion tracking dirty for this body.
+    const retry = await routeAutoCombo({ body, comboName: "auto", comboStrategies, log, targetExists: async () => true, delegate: (sent, target) => new Response(`retried ${target}`) });
+    assert.equal(retry.status, 200, `${name} resolver failure must not poison the next request`);
+    assert.equal(await retry.text(), "retried coder");
+  }
+});
+
 test("cloned delegation cannot bypass static Auto Router protection", async () => {
   const body = message("hello"), log = { info() {}, warn() {} };
   const response = await routeAutoCombo({ body, comboName: "auto-a", comboStrategies: { "auto-a": { autoRouter: { easyTarget: "auto-b", hardTarget: "ordinary" } }, "auto-b": { fallbackStrategy: "auto" } }, log, delegate: (sent) => routeAutoCombo({ body: { ...sent }, comboName: "auto-b", comboStrategies: {}, log, delegate: () => new Response("unexpected") }) });
