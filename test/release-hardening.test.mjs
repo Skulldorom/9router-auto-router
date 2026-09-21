@@ -26,3 +26,18 @@ test("external GitHub Actions are immutable SHA pins with release comments", () 
     }
   }
 });
+
+
+test("publish gates latest on both current source and current upstream digest before registry login", () => {
+  const publish = workflows.find(([file]) => file === "publish.yml")?.[1] || "";
+  const freshness = publish.indexOf("Refuse stale source or upstream validation");
+  const login = publish.indexOf("Authenticate to GHCR after validation");
+  const publishTags = publish.indexOf("Publish immutable tags, then last-known-good latest");
+  assert.ok(freshness >= 0 && freshness < login && login < publishTags);
+  assert.match(publish, /VALIDATED_UPSTREAM_DIGEST: \$\{\{ needs\.validate\.outputs\.upstream_digest \}\}/);
+  assert.match(publish, /docker buildx imagetools inspect "\$UPSTREAM_IMAGE"/);
+  assert.match(publish, /current_upstream=.*upstream-inspect\.txt/);
+  assert.match(publish, /\[ "\$current_upstream" != "\$VALIDATED_UPSTREAM_DIGEST" \]/);
+  assert.match(publish, /skip latest until a new run validates it/);
+  assert.match(publish, /if: steps\.current\.outputs\.publish == 'true'/);
+});
