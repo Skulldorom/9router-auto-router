@@ -13,6 +13,7 @@ MOCK_DIR=$(mktemp -d)
 WORK_DIR=$(mktemp -d)
 COOKIE_JAR="$WORK_DIR/cookies.txt"
 PASSWORD=rollback-compatibility-password
+PLAYWRIGHT_IMAGE=${PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright:v1.58.2-noble}
 OWNER_UID=$(id -u); OWNER_GID=$(id -g)
 cleanup() { status=$?; trap - EXIT INT TERM; docker rm -f "$NAME" "$MOCK_NAME" >/dev/null 2>&1 || true; docker network rm "$NETWORK" >/dev/null 2>&1 || true; rm -rf "$WORK_DIR"; purge_dir "$IMAGE" "$DATA_DIR" "$OWNER_UID" "$OWNER_GID" || true; purge_dir "$IMAGE" "$MOCK_DIR" "$OWNER_UID" "$OWNER_GID" || true; exit "$status"; }
 trap cleanup EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
@@ -27,6 +28,26 @@ api() { curl --fail --silent --show-error --cookie "$COOKIE_JAR" -H 'Content-Typ
 settings() { api "http://127.0.0.1:$PORT/api/settings"; }
 combos() { api "http://127.0.0.1:$PORT/api/combos"; }
 assert_data() { settings | grep -q 'unrelatedRollbackSetting'; combos | grep -q 'coder-high'; combos | grep -q 'coder-auto'; combos | grep -q 'coder-model'; }
+browser_combos() {
+  phase=$1
+  docker run --rm --add-host=host.docker.internal:host-gateway -e BASE_URL="http://host.docker.internal:$PORT" -e PASSWORD="$PASSWORD" -e PHASE="$phase" "$PLAYWRIGHT_IMAGE" node - <<'NODE'
+const { chromium } = require("playwright");
+(async () => {
+  const errors = [];
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  page.on("pageerror", error => errors.push(error.stack || error.message));
+  const login = await page.request.post(`${process.env.BASE_URL}/api/auth/login`, { data: { password: process.env.PASSWORD } });
+  if (!login.ok()) throw new Error(`login failed: ${login.status()}`);
+  await page.goto(`${process.env.BASE_URL}/dashboard/combos`, { waitUntil: "networkidle" });
+  for (const combo of ["coder", "coder-high", "coder-auto"]) await page.getByText(combo, { exact: true }).first().waitFor();
+  if (errors.length) throw new Error(`${process.env.PHASE} Combos page errors:\\n${errors.join("\\n")}`);
+  await context.close();
+  await browser.close();
+})().catch(error => { console.error(error); process.exit(1); });
+NODE
+}
 
 start "$UPSTREAM_IMAGE"
 api -X POST --data '{"provider":"ollama-local","name":"mock","apiKey":"test","providerSpecificData":{"baseUrl":"http://'"$MOCK_NAME"':8080"}}' "http://127.0.0.1:$PORT/api/providers" >/dev/null
@@ -35,6 +56,7 @@ api -X PATCH --data '{"unrelatedRollbackSetting":"preserve-me"}' "http://127.0.0
 assert_data; stop
 
 start "$IMAGE"
+browser_combos patched-before-auto
 api -X PATCH --data '{"comboStrategies":{"coder-auto":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"coder","hardTarget":"coder-high"}}},"unrelatedRollbackSetting":"preserve-me"}' "http://127.0.0.1:$PORT/api/settings" >/dev/null
 settings | grep -q 'fallbackStrategy":"auto'; assert_data
 KEY=$(api -X POST --data '{"name":"rollback"}' "http://127.0.0.1:$PORT/api/keys" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).key))')
@@ -43,13 +65,14 @@ stop
 
 start "$UPSTREAM_IMAGE"
 assert_data
-curl --fail --silent --location -H 'Cache-Control: no-cache' "http://127.0.0.1:$PORT/dashboard/combos" | grep -q '<html'
+browser_combos stock-rollback
 stock_auto_response=$(curl --silent -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" --data '{"model":"coder-auto","messages":[{"role":"user","content":"stock auto behavior"}]}' "http://127.0.0.1:$PORT/api/v1/chat/completions")
 printf '%s' "$stock_auto_response" | grep -q 'ok' || { echo "Expected observed stock fallbackStrategy:auto delegation response, got: $stock_auto_response" >&2; exit 1; }
 api -X PATCH --data '{"comboStrategies":{"coder-auto":{"fallbackStrategy":"fallback"}},"unrelatedRollbackSetting":"preserve-me"}' "http://127.0.0.1:$PORT/api/settings" >/dev/null
 settings | grep -q 'fallbackStrategy":"fallback'; combos | grep -q 'coder-auto-model'; assert_data; stop
 
 start "$IMAGE"; assert_data
+browser_combos patched-after-recovery
 api -X PATCH --data '{"comboStrategies":{"coder-auto":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"coder","hardTarget":"coder-high"}}},"unrelatedRollbackSetting":"preserve-me"}' "http://127.0.0.1:$PORT/api/settings" >/dev/null
-settings | grep -q 'fallbackStrategy":"auto'; curl --fail --silent --location -H 'Cache-Control: no-cache' "http://127.0.0.1:$PORT/dashboard/combos" | grep -q '<html'
+settings | grep -q 'fallbackStrategy":"auto'; browser_combos patched-reconfigured
 echo "Rollback compatibility test passed: stock → Auto Router → stock → Auto Router used one /app/data volume; stock delegates persisted fallbackStrategy:auto to the combo model, and recovery to fallback preserves combo models and unrelated settings."

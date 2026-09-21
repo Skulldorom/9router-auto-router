@@ -197,8 +197,10 @@ function discoverUiCandidates() {
   if (candidates.length !== 2) fail(`Combo UI strategy asset candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  Fallback — try in order, Round Robin — rotate, Fusion — panel + judge`);
   return candidates;
 }
-function verifyPatchedUi(target, source = fs.readFileSync(target, "utf8")) {
-  if (count(source, uiMarker) !== 1 || count(source, 'label:"Auto Router"') !== 1 || count(source, "autoRouter") < 2 || count(source, "availableCombos:") !== 2) fail(`Patched UI integrity failed:\n  ${path.relative(appRoot, target)}`);
+function verifyPatchedUi(target, source = fs.readFileSync(target, "utf8"), spec) {
+  const expected = spec && `availableCombos:${spec.collection}.map(${spec.callEvent}=>({name:${spec.callEvent}.name,strategy:${spec.collectionStrategies}[${spec.callEvent}.name]||{}}))`;
+  const wrong = spec && `availableCombos:${spec.combo}.map(`;
+  if (count(source, uiMarker) !== 1 || count(source, 'label:"Auto Router"') !== 1 || count(source, "autoRouter") < 2 || count(source, "availableCombos:") !== 2 || (spec && (!source.includes(expected) || source.includes(wrong)))) fail(`Patched UI integrity failed:\n  ${path.relative(appRoot, target)}`);
 }
 function uniqueMatch(source, expression, name, target) {
   const matches = [...source.matchAll(expression)];
@@ -222,11 +224,16 @@ function uiPatchSpec(source, target) {
   const props = propCandidates[0][1];
   const combo = new RegExp(`(?:^|,)combo:([A-Za-z_$][\\w$]*)(?:,|$)`).exec(props)?.[1];
   if (!combo) fail(`Auto Router UI component is missing its combo binding:\n  ${path.relative(appRoot, target)}`);
-  const call = uniqueMatch(source, new RegExp(`strategy:([A-Za-z_$][\\w$]*)\\[${escapePattern(combo)}\\.name\\]\\|\\|\\{\\},onSetStrategy:([A-Za-z_$][\\w$]*)=>[A-Za-z_$][\\w$]*\\(${escapePattern(combo)}\\.name,\\2\\)`, "g"), "combo collection call", target);
-  const [, collectionStrategies, callEvent] = call;
+  const component = /^function\s+([A-Za-z_$][\w$]*)/.exec(propCandidates[0][0])?.[1];
+  if (!component) fail(`Auto Router UI component binding is missing:\n  ${path.relative(appRoot, target)}`);
+  const identifier = String.raw`[A-Za-z_$][\w$]*`;
+  const cardCall = uniqueMatch(source, new RegExp(`(${identifier})\\.map\\((${identifier})=>\\(0,${jsx}\\.jsx\\)\\(${component},\\{combo:\\2,[^}]*?(strategy:(${identifier})\\[\\2\\.name\\]\\|\\|\\{\\},onSetStrategy:(${identifier})=>${identifier}\\(\\2\\.name,\\5\\))`, "g"), "combo collection card render", target);
+  const [, comboCollection, entry, callText, collectionStrategies, callEvent] = cardCall;
+  const collection = "_arComboCollection";
+  if (entry !== combo) fail(`Auto Router UI combo collection entry does not match the card combo binding:\n  ${path.relative(appRoot, target)}`);
   const card = uniqueMatch(source, new RegExp(`"fusion"===${escapePattern(level)}&&`, "g"), "fusion card", target)[0];
-  if (["_arConfig", "_arUpdate", "_arCombos", "_arHard"].some((name) => source.includes(name))) fail(`Auto Router UI generated binding collision:\n  ${path.relative(appRoot, target)}`);
-  return { selectorText, jsx, level, update, stateText: state[0], strategy, react, componentText: propCandidates[0][0], combo, callText: call[0], collectionStrategies, callEvent, card };
+  if (["_arConfig", "_arUpdate", "_arCombos", "_arHard", "_arComboCollection"].some((name) => source.includes(name))) fail(`Auto Router UI generated binding collision:\n  ${path.relative(appRoot, target)}`);
+  return { selectorText, jsx, level, update, stateText: state[0], strategy, react, componentText: propCandidates[0][0], combo, comboCollection, collection, callText, collectionStrategies, callEvent, card };
 }
 function controls(spec) {
   const input = (label, state, setter, key, fallback, hint = "") => `(0,${spec.jsx}.jsxs)("label",{className:"grid gap-1",children:["${label}${hint}",(0,${spec.jsx}.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:${state},onChange:event=>${setter}(event.target.value),onBlur:event=>{const value=Number(event.target.value);if(Number.isSafeInteger(value)&&value>0)_arUpdate("${key}",value);else ${setter}(String(_arConfig.${key}||${fallback}))}})]})`;
@@ -245,11 +252,11 @@ function patchUi(targets) {
     const spec = uiPatchSpec(source, target);
     const componentPatched = spec.componentText.replace(`onSetStrategy:${spec.update}`, `onSetStrategy:${spec.update},availableCombos:_arCombos=[]`);
     if (componentPatched === spec.componentText) fail(`Auto Router UI component props could not be extended:\n  ${path.relative(appRoot, target)}`);
-    const callPatched = `availableCombos:${spec.combo}.map(${spec.callEvent}=>({name:${spec.callEvent}.name,strategy:${spec.collectionStrategies}[${spec.callEvent}.name]||{}})),${spec.callText}`;
+    const callPatched = `availableCombos:${spec.collection}.map(${spec.callEvent}=>({name:${spec.callEvent}.name,strategy:${spec.collectionStrategies}[${spec.callEvent}.name]||{}})),${spec.callText}`;
     const statePatched = `${spec.stateText}const _arConfig=${spec.strategy}.autoRouter&&typeof ${spec.strategy}.autoRouter==="object"?${spec.strategy}.autoRouter:{},_arUpdate=(key,value)=>${spec.update}({autoRouter:{..._arConfig,[key]:value}}),[_arHard,_arSetHard]=(0,${spec.react}.useState)(String(_arConfig.hardThreshold||6)),[_arContext,_arSetContext]=(0,${spec.react}.useState)(String(_arConfig.longContextChars||24000)),[_arToolResult,_arSetToolResult]=(0,${spec.react}.useState)(String(_arConfig.largeToolResultChars||12000)),[_arTools,_arSetTools]=(0,${spec.react}.useState)(String(_arConfig.manyTools||16));(0,${spec.react}.useEffect)(()=>{_arSetHard(String(_arConfig.hardThreshold||6));_arSetContext(String(_arConfig.longContextChars||24000));_arSetToolResult(String(_arConfig.largeToolResultChars||12000));_arSetTools(String(_arConfig.manyTools||16));},[_arConfig.hardThreshold,_arConfig.longContextChars,_arConfig.largeToolResultChars,_arConfig.manyTools]);`;
     const rendered = `(0,${spec.jsx}.jsxs)("div",{children:[${spec.selectorText},"auto"===${spec.level}&&${controls(spec)}]})`;
-    source = source.replace(spec.componentText, componentPatched).replace(spec.callText, callPatched).replace(spec.stateText, statePatched).replace(spec.selectorText, rendered).replace(spec.card, `"auto"===${spec.level}&&(0,${spec.jsx}.jsx)("div",{className:"mt-2 text-[11px] text-text-muted",children:"Auto Router"}),${spec.card}`).replace(UI_ANCHOR, `${UI_PATCH}/* ${uiMarker} */`);
-    verifyPatchedUi(target, source);
+    source = source.replace(spec.componentText, componentPatched).replace(`${spec.comboCollection}.map(${spec.combo}=>`, `${spec.comboCollection}.map((${spec.combo},_arComboIndex,_arComboCollection)=>`).replace(spec.callText, callPatched).replace(spec.stateText, statePatched).replace(spec.selectorText, rendered).replace(spec.card, `"auto"===${spec.level}&&(0,${spec.jsx}.jsx)("div",{className:"mt-2 text-[11px] text-text-muted",children:"Auto Router"}),${spec.card}`).replace(UI_ANCHOR, `${UI_PATCH}/* ${uiMarker} */`);
+    verifyPatchedUi(target, source, spec);
     fs.writeFileSync(target, source);
     changed = true;
   }

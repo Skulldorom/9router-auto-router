@@ -89,6 +89,7 @@ jobs:
       - run: ./scripts/runtime-test.sh "${{ inputs.image_tag }}"
       - run: ./scripts/settings-persistence-test.sh "${{ inputs.image_tag }}"
       - run: ./scripts/auto-router-http-test.sh "${{ inputs.image_tag }}"
+      - run: ./scripts/rollback-compatibility-test.sh "${{ inputs.image_tag }}"
       - name: Save validated image for the trusted publish job
         if: inputs.upload_image
         run: docker save "${{ inputs.image_tag }}" | gzip > validated-image.tar.gz
