@@ -133,6 +133,8 @@ services:
 +   image: ghcr.io/skulldorom/9router-auto-router:latest
 ```
 
+**Use `latest` for automatic validated updates.** It can change when a newly validated `decolua/9router:latest` digest is released even if this repository's source commit did not change. Production environments requiring explicit change control should use the canonical `sha-<full-40-character-commit>` tag documented below.
+
 Keep the existing volume unchanged. In particular, this persistent 9Router configuration remains intact:
 
 ```yaml

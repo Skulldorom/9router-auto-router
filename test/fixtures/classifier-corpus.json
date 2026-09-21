@@ -1,44 +1,814 @@
 [
-  {"level":"easy","prompt":"Rename the local retryCount variable in src/request.js."},
-  {"level":"easy","prompt":"Change the Save button text to Save changes."},
-  {"level":"easy","prompt":"Fix the typo in the README introduction sentence."},
-  {"level":"easy","prompt":"Adjust the card padding from 16px to 20px in styles.css."},
-  {"level":"easy","prompt":"Fix the null check in the localized parseConfig function."},
-  {"level":"easy","prompt":"Update one condition in src/auth.js."},
-  {"level":"easy","prompt":"Set the timeout to 30 in config.json."},
-  {"level":"easy","prompt":"Rename the \"review\" menu item."},
-  {"level":"easy","prompt":"Change the \"security\" heading text."},
-  {"level":"easy","prompt":"Update docs/migration-plan.json."},
-  {"level":"easy","prompt":"Rename reviewStatus to approvalStatus."},
-  {"level":"easy","prompt":"Rename migrationPlan to deploymentPlan."},
-  {"level":"easy","prompt":"Rename the review-status field."},
-  {"level":"easy","prompt":"What does this function return?"},
-  {"level":"easy","prompt":"The label says \"authentication architecture\"; change it to Login design."},
-  {"level":"hard","prompt":"Perform a deep repository audit of the routing policy."},
-  {"level":"hard","prompt":"Do a deep-review of this implementation."},
-  {"level":"hard","prompt":"Investigate a concurrency race-condition in request retries."},
-  {"level":"hard","prompt":"Redesign the architecture for the new worker system."},
-  {"level":"hard","prompt":"Plan a database migration with rollback safety."},
-  {"level":"hard","prompt":"Fully audit authentication and permissions."},
-  {"level":"hard","prompt":"Diagnose intermittent failing tests with an unclear cause."},
-  {"level":"hard","prompt":"Investigate financial decimal precision errors."},
-  {"level":"hard","prompt":"Refactor this multi-file module."},
-  {"level":"hard","prompt":"Find the root-cause of this production failure."},
-  {"level":"hard","prompt":"Run a substantial performance investigation before changing the cache."},
-  {"level":"hard","prompt":"Investigate \"authentication architecture\" for vulnerabilities."},
-  {"level":"hard","prompt":"fully-audit the repository before release."},
-  {"level":"hard","prompt":"fully: audit the repository before release."},
-  {"level":"easy","prompt":"Correct the spelling in docs/permissions.md."},
-  {"level":"easy","prompt":"Set enableAuditLabel to false in config.json."},
-  {"level":"easy","prompt":"Rename authenticateUser to signInUser."},
-  {"level":"easy","prompt":"Change architecturePreview to systemPreview."},
-  {"level":"easy","prompt":"Update the \"Security\" tab title."},
-  {"level":"easy","prompt":"Fix punctuation in the migration notes."},
-  {"level":"easy","prompt":"continue"},
-  {"level":"hard","prompt":"Review the repository-wide authorization implementation."},
-  {"level":"hard","prompt":"Plan the payments schema migration with a tested rollback."},
-  {"level":"hard","prompt":"Debug intermittent failing tests in production."},
-  {"level":"hard","prompt":"Investigate a race condition in cache invalidation."},
-  {"level":"hard","prompt":"Analyze financial precision in invoice totals."},
-  {"level":"hard","prompt":"Refactor this multi-file request pipeline."}
+  {
+    "level": "easy",
+    "prompt": "Rename the local retryCount variable in src/request.js."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the Save button text to Save changes."
+  },
+  {
+    "level": "easy",
+    "prompt": "Fix the typo in the README introduction sentence."
+  },
+  {
+    "level": "easy",
+    "prompt": "Adjust the card padding from 16px to 20px in styles.css."
+  },
+  {
+    "level": "easy",
+    "prompt": "Fix the null check in the localized parseConfig function."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update one condition in src/auth.js."
+  },
+  {
+    "level": "easy",
+    "prompt": "Set the timeout to 30 in config.json."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename the \"review\" menu item."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the \"security\" heading text."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update docs/migration-plan.json."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename reviewStatus to approvalStatus."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename migrationPlan to deploymentPlan."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename the review-status field."
+  },
+  {
+    "level": "easy",
+    "prompt": "What does this function return?"
+  },
+  {
+    "level": "easy",
+    "prompt": "The label says \"authentication architecture\"; change it to Login design."
+  },
+  {
+    "level": "hard",
+    "prompt": "Perform a deep repository audit of the routing policy."
+  },
+  {
+    "level": "hard",
+    "prompt": "Do a deep-review of this implementation."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate a concurrency race-condition in request retries."
+  },
+  {
+    "level": "hard",
+    "prompt": "Redesign the architecture for the new worker system."
+  },
+  {
+    "level": "hard",
+    "prompt": "Plan a database migration with rollback safety."
+  },
+  {
+    "level": "hard",
+    "prompt": "Fully audit authentication and permissions."
+  },
+  {
+    "level": "hard",
+    "prompt": "Diagnose intermittent failing tests with an unclear cause."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate financial decimal precision errors."
+  },
+  {
+    "level": "hard",
+    "prompt": "Refactor this multi-file module."
+  },
+  {
+    "level": "hard",
+    "prompt": "Find the root-cause of this production failure."
+  },
+  {
+    "level": "hard",
+    "prompt": "Run a substantial performance investigation before changing the cache."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate \"authentication architecture\" for vulnerabilities."
+  },
+  {
+    "level": "hard",
+    "prompt": "fully-audit the repository before release."
+  },
+  {
+    "level": "hard",
+    "prompt": "fully: audit the repository before release."
+  },
+  {
+    "level": "easy",
+    "prompt": "Correct the spelling in docs/permissions.md."
+  },
+  {
+    "level": "easy",
+    "prompt": "Set enableAuditLabel to false in config.json."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename authenticateUser to signInUser."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change architecturePreview to systemPreview."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update the \"Security\" tab title."
+  },
+  {
+    "level": "easy",
+    "prompt": "Fix punctuation in the migration notes."
+  },
+  {
+    "level": "easy",
+    "prompt": "continue"
+  },
+  {
+    "level": "hard",
+    "prompt": "Review the repository-wide authorization implementation."
+  },
+  {
+    "level": "hard",
+    "prompt": "Plan the payments schema migration with a tested rollback."
+  },
+  {
+    "level": "hard",
+    "prompt": "Debug intermittent failing tests in production."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate a race condition in cache invalidation."
+  },
+  {
+    "level": "hard",
+    "prompt": "Analyze financial precision in invoice totals."
+  },
+  {
+    "level": "hard",
+    "prompt": "Refactor this multi-file request pipeline."
+  },
+  {
+    "level": "easy",
+    "prompt": "Fix a typo in the changelog."
+  },
+  {
+    "level": "easy",
+    "prompt": "Correct one spelling mistake in the UI."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change a single line in src/config.js."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename the fetchUser variable to user."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename formatDate to formatDisplayDate."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename the Cancel button label to Close."
+  },
+  {
+    "level": "easy",
+    "prompt": "Edit one README sentence for clarity."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change maxRetries from 3 to 4."
+  },
+  {
+    "level": "easy",
+    "prompt": "Adjust one CSS border color."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update a Docker environment variable value."
+  },
+  {
+    "level": "easy",
+    "prompt": "Add one straightforward debug log line."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update one isolated assertion in the unit test."
+  },
+  {
+    "level": "easy",
+    "prompt": "Bump the patch version of a dependency."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename securityBadge to safetyBadge."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename authenticationToken to sessionToken."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the Architecture label to Design."
+  },
+  {
+    "level": "easy",
+    "prompt": "Edit documentation mentioning database migrations."
+  },
+  {
+    "level": "easy",
+    "prompt": "Replace the quoted text \"deep audit the repository\" in the README."
+  },
+  {
+    "level": "easy",
+    "prompt": "Replace the code block phrase \"race condition\" in docs."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename the file security-notes.md."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the icon in one small image asset."
+  },
+  {
+    "level": "easy",
+    "prompt": "Crop the provided screenshot by five pixels."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update one package script value."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change a single Docker label."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename a CSS class."
+  },
+  {
+    "level": "easy",
+    "prompt": "Fix an extra comma in a JSON file."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the tooltip text."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update one environment example."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename one test case."
+  },
+  {
+    "level": "easy",
+    "prompt": "Add a one-line comment."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the default port in config."
+  },
+  {
+    "level": "easy",
+    "prompt": "Fix a link in README."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the empty state label."
+  },
+  {
+    "level": "easy",
+    "prompt": "Replace one hex color."
+  },
+  {
+    "level": "easy",
+    "prompt": "Set a boolean feature flag."
+  },
+  {
+    "level": "easy",
+    "prompt": "Correct a filename in documentation."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename architectureDiagram to systemDiagram."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename authentication-header to login-header."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update migration-guide.md wording."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the \"security review\" label."
+  },
+  {
+    "level": "easy",
+    "prompt": "Replace the quoted phrase \"root cause analysis\" in a test fixture."
+  },
+  {
+    "level": "easy",
+    "prompt": "Add a log line when a cache entry expires."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change a single CSS margin."
+  },
+  {
+    "level": "easy",
+    "prompt": "Upgrade a straightforward dev dependency patch."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename a function parameter."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update a mock response string."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change one Docker compose environment variable."
+  },
+  {
+    "level": "easy",
+    "prompt": "Fix a spelling typo in an image caption."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename the retry button label."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update one test snapshot string."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change a config timeout."
+  },
+  {
+    "level": "easy",
+    "prompt": "Correct punctuation in a migration document."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename the permissions tab."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the Authentication heading."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update docs for a deployment variable."
+  },
+  {
+    "level": "easy",
+    "prompt": "Replace a hard keyword inside a fenced code sample."
+  },
+  {
+    "level": "easy",
+    "prompt": "Add alt text to one image."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change a single SVG fill color."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename the save handler."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update an example command."
+  },
+  {
+    "level": "easy",
+    "prompt": "Fix one import path."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change a release note word."
+  },
+  {
+    "level": "easy",
+    "prompt": "Set one CI environment value."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename the readme section title."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the empty error message."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update a JSON label."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename the architecture menu item."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change a one-line shell script comment."
+  },
+  {
+    "level": "easy",
+    "prompt": "Fix a simple test fixture value."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update one CSS font size."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change a Docker ARG default."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename an authentication helper symbol."
+  },
+  {
+    "level": "easy",
+    "prompt": "Replace a quoted security phrase in a docs example."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change the title of a migration note."
+  },
+  {
+    "level": "easy",
+    "prompt": "Update one UI placeholder."
+  },
+  {
+    "level": "easy",
+    "prompt": "Fix a trailing whitespace typo."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename one file described as security-related."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change a simple icon filename."
+  },
+  {
+    "level": "easy",
+    "prompt": "Edit the README migration paragraph."
+  },
+  {
+    "level": "easy",
+    "prompt": "Change one small image crop setting."
+  },
+  {
+    "level": "easy",
+    "prompt": "Rename a test helper."
+  },
+  {
+    "level": "hard",
+    "prompt": "Perform a deep audit of the entire repository."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review the repository-wide routing implementation."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate a race condition in the scheduler."
+  },
+  {
+    "level": "hard",
+    "prompt": "Debug a concurrency failure under load."
+  },
+  {
+    "level": "hard",
+    "prompt": "Find the root cause of intermittent production errors."
+  },
+  {
+    "level": "hard",
+    "prompt": "Diagnose intermittent test failures."
+  },
+  {
+    "level": "hard",
+    "prompt": "Run a security audit of the authorization layer."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review the authorization implementation for privilege escalation."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review the authentication architecture."
+  },
+  {
+    "level": "hard",
+    "prompt": "Refactor the request pipeline across multiple files."
+  },
+  {
+    "level": "hard",
+    "prompt": "Plan a database migration and rollback."
+  },
+  {
+    "level": "hard",
+    "prompt": "Analyze financial precision for billing totals."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate a broad performance regression."
+  },
+  {
+    "level": "hard",
+    "prompt": "Debug a complicated deployment failure."
+  },
+  {
+    "level": "hard",
+    "prompt": "Resolve CI failures with unclear causes."
+  },
+  {
+    "level": "hard",
+    "prompt": "Design a cross-component architectural change."
+  },
+  {
+    "level": "hard",
+    "prompt": "Debug a substantial production incident."
+  },
+  {
+    "level": "hard",
+    "prompt": "Audit fallback and round-robin behavior across the repository."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate stale writes in concurrent workers."
+  },
+  {
+    "level": "hard",
+    "prompt": "Analyze a deadlock in the job queue."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review credential handling and permission boundaries."
+  },
+  {
+    "level": "hard",
+    "prompt": "Plan a zero-downtime schema migration."
+  },
+  {
+    "level": "hard",
+    "prompt": "Design rollback procedures for a data migration."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate incorrect decimal rounding in invoices."
+  },
+  {
+    "level": "hard",
+    "prompt": "Profile end-to-end latency across services."
+  },
+  {
+    "level": "hard",
+    "prompt": "Analyze a memory leak affecting production."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review the full CI release pipeline."
+  },
+  {
+    "level": "hard",
+    "prompt": "Diagnose an intermittent streaming failure."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate a distributed cache consistency issue."
+  },
+  {
+    "level": "hard",
+    "prompt": "Refactor the multi-file authorization flow."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review architecture for a new cross-service protocol."
+  },
+  {
+    "level": "hard",
+    "prompt": "Audit the repository before an upstream upgrade."
+  },
+  {
+    "level": "hard",
+    "prompt": "Trace a production request through all components."
+  },
+  {
+    "level": "hard",
+    "prompt": "Reproduce a flaky integration test failure."
+  },
+  {
+    "level": "hard",
+    "prompt": "Analyze a complex Docker deployment outage."
+  },
+  {
+    "level": "hard",
+    "prompt": "Plan an authentication redesign."
+  },
+  {
+    "level": "hard",
+    "prompt": "Assess security controls around provider credentials."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate a race condition in settings persistence."
+  },
+  {
+    "level": "hard",
+    "prompt": "Debug unexplained failures in GitHub Actions."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review data migration safety and rollback."
+  },
+  {
+    "level": "hard",
+    "prompt": "Optimize a large performance bottleneck."
+  },
+  {
+    "level": "hard",
+    "prompt": "Analyze concurrent queue processing."
+  },
+  {
+    "level": "hard",
+    "prompt": "Perform a deep review of the release system."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate a root cause across services."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review all provider fallback paths."
+  },
+  {
+    "level": "hard",
+    "prompt": "Debug a production authorization bypass."
+  },
+  {
+    "level": "hard",
+    "prompt": "Plan a broad repository restructure."
+  },
+  {
+    "level": "hard",
+    "prompt": "Redesign the routing architecture."
+  },
+  {
+    "level": "hard",
+    "prompt": "Audit financial precision and reconciliation."
+  },
+  {
+    "level": "hard",
+    "prompt": "Diagnose an intermittent CI failure."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate a complex upstream compatibility regression."
+  },
+  {
+    "level": "hard",
+    "prompt": "Analyze cross-component deployment behavior."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review the database migration implementation."
+  },
+  {
+    "level": "hard",
+    "prompt": "Trace an authentication failure across components."
+  },
+  {
+    "level": "hard",
+    "prompt": "Audit the security architecture."
+  },
+  {
+    "level": "hard",
+    "prompt": "Refactor multiple modules for a new API boundary."
+  },
+  {
+    "level": "hard",
+    "prompt": "Debug an intermittent timeout under production traffic."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate concurrency and stale-write behavior."
+  },
+  {
+    "level": "hard",
+    "prompt": "Plan the rollback for a failed deployment."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review the repository-wide test strategy."
+  },
+  {
+    "level": "hard",
+    "prompt": "Analyze a performance investigation across the stack."
+  },
+  {
+    "level": "hard",
+    "prompt": "Diagnose an unclear failure in the release job."
+  },
+  {
+    "level": "hard",
+    "prompt": "Audit authorization and authentication design."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate a difficult production bug."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review the architecture of the background worker."
+  },
+  {
+    "level": "hard",
+    "prompt": "Plan a migration of persisted settings."
+  },
+  {
+    "level": "hard",
+    "prompt": "Debug a race condition in streaming responses."
+  },
+  {
+    "level": "hard",
+    "prompt": "Analyze precision loss in financial exports."
+  },
+  {
+    "level": "hard",
+    "prompt": "Audit external provider authentication handling."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review the multi-file routing refactor."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate a deployment failure involving several services."
+  },
+  {
+    "level": "hard",
+    "prompt": "Diagnose flaky concurrency tests."
+  },
+  {
+    "level": "hard",
+    "prompt": "Perform a deep repository audit of CI."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review permissions and security boundaries."
+  },
+  {
+    "level": "hard",
+    "prompt": "Plan a database migration rollback strategy."
+  },
+  {
+    "level": "hard",
+    "prompt": "Analyze a substantial production debugging incident."
+  },
+  {
+    "level": "hard",
+    "prompt": "Investigate cross-component architecture changes."
+  },
+  {
+    "level": "hard",
+    "prompt": "Debug complicated failure handling in fallback routing."
+  },
+  {
+    "level": "hard",
+    "prompt": "Review all source files for a security issue."
+  },
+  {
+    "level": "hard",
+    "prompt": "Trace a root cause in intermittent CI failures."
+  }
 ]

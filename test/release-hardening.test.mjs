@@ -41,3 +41,17 @@ test("publish gates latest on both current source and current upstream digest be
   assert.match(publish, /skip latest until a new run validates it/);
   assert.match(publish, /if: steps\.current\.outputs\.publish == 'true'/);
 });
+
+test("derived image verification precedes every image integration test", () => {
+  const validate = workflows.find(([file]) => file === "validate-image.yml")?.[1] || "";
+  const verification = validate.indexOf("Verify the built derived image");
+  const smoke = validate.indexOf("./scripts/smoke-test.sh");
+  const runtime = validate.indexOf("./scripts/runtime-test.sh");
+  const persistence = validate.indexOf("./scripts/settings-persistence-test.sh");
+  const http = validate.indexOf("./scripts/auto-router-http-test.sh");
+  assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http);
+  assert.match(validate, /verify-built-image\.sh "\$\{\{ inputs\.image_tag \}\}" "\$REVISION" "\$UPSTREAM_DIGEST"/);
+  const verifier = fs.readFileSync(path.join(root, "scripts/verify-built-image.sh"), "utf8");
+  for (const required of ["auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v3", "Easy target", "Hard target", "org.opencontainers.image.revision", "upstream.digest"]) assert.ok(verifier.includes(required));
+  assert.doesNotMatch(verifier, /page-hash|app\/dashboard\/combos\/page/);
+});

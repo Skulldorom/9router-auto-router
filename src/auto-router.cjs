@@ -11,19 +11,27 @@ const TASK_ACTION_TERMS = [
   "optimize", "optimise", "benchmark", "profile", "trace", "reproduce", "resolve",
   "rewrite", "overhaul", "plan", "implement", "survey",
 ];
+// An unquoted investigative or structural action is itself meaningful intent. Keep
+// `plan`, `implement`, and `resolve` out: those verbs frequently describe small edits.
+const COMPLEX_ACTION_TERMS = [
+  "audit", "review", "investigate", "analyze", "analyse", "assess", "diagnose",
+  "debug", "refactor", "redesign", "restructure", "harden", "optimize", "optimise",
+  "benchmark", "profile", "trace", "reproduce", "rewrite", "overhaul", "survey",
+];
+const SIMPLE_EDIT_ACTIONS = new Set(["add", "change", "correct", "edit", "fix", "rename", "replace", "set", "update"]);
 const STRONG_TASK_PHRASES = Object.freeze([
   { reason: "audit", terms: ["fully audit", "deep review", "deep repository audit"] },
-  { reason: "architecture", terms: ["design the architecture", "design architecture"] },
+  { reason: "architecture", terms: ["design the architecture", "design architecture", "repository restructure", "rollback procedures"] },
   { reason: "review", terms: ["review"] },
   { reason: "trace", terms: ["trace"] },
   { reason: "concurrency", terms: ["race condition", "concurrency", "stale-write", "stale write"] },
-  { reason: "root-cause", terms: ["root cause", "debug intermittent", "intermittent failing tests", "failing tests with unclear cause"] },
+  { reason: "root-cause", terms: ["root cause", "debug intermittent", "intermittent failing tests", "failing tests with unclear cause", "failures with unclear causes", "unclear failure"] },
   { reason: "precision", terms: ["financial precision", "decimal precision"] },
   { reason: "performance", terms: ["performance investigation"] },
-  { reason: "architecture", terms: ["repository-wide", "multi-file"] },
+  { reason: "architecture", terms: ["repository-wide", "multi-file", "cross-component", "cross component"] },
 ]);
 const GATED_STRUCTURAL_TERMS = Object.freeze([
-  { reason: "migration", terms: ["migration", "migrate"] },
+  { reason: "migration", terms: ["migration", "migrate", "rollback"] },
   { reason: "architecture", terms: ["architecture"] },
 ]);
 const WEAK_DOMAIN_TERMS = Object.freeze([
@@ -235,8 +243,12 @@ function keywordMatches(text) {
   const reasonsFor = (groups, allowQuoted = false) => groups.filter((group) => group.terms.some((term) => hasTerm(tokens, term, allowQuoted))).map((group) => group.reason);
   const strong = reasonsFor(STRONG_TASK_PHRASES);
   const taskOriented = TASK_ACTION_TERMS.some((term) => hasTerm(tokens, term));
+  // A complex verb buried in a small edit ("add a debug log") is not enough.
+  // Leading unquoted task actions remain robust to aliases while quoted labels stay inert.
+  const complexAction = !SIMPLE_EDIT_ACTIONS.has(tokens[0]?.value) && tokens.slice(0, 4).some((token) => !token.quoted && COMPLEX_ACTION_TERMS.includes(token.value));
   return {
     strong,
+    complexAction,
     // Quoted nouns remain inert by themselves. Once an unquoted action establishes
     // task intent, quoted domain context is meaningful and receives normal weight.
     gated: taskOriented ? reasonsFor(GATED_STRUCTURAL_TERMS, true) : [],
@@ -267,6 +279,7 @@ function classifyTaskComplexity(body, config = getConfig()) {
     const latest = state.userTexts.at(-1) || "";
     const latestMatches = keywordMatches(latest);
     for (const reason of latestMatches.strong) add(STRONG_WEIGHT, reason);
+    if (latestMatches.complexAction && latestMatches.strong.length === 0) add(STRONG_WEIGHT, "complex-action");
     for (const reason of latestMatches.gated) add(GATED_WEIGHT, reason);
     for (const reason of latestMatches.weak) add(WEAK_WEIGHT, reason);
     // Keep historic semantic context helpful without allowing it alone to cross a

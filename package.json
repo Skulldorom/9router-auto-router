@@ -5,11 +5,16 @@
   "description": "Deterministic pre-generation routing overlay for 9Router combos",
   "type": "module",
   "scripts": {
-    "test": "node --test",
-    "check": "node --check src/auto-router.cjs && node --check patches/apply-patch.mjs && node --check test/*.mjs"
+    "lint": "eslint .",
+    "syntax": "node --check src/auto-router.cjs && node --check patches/apply-patch.mjs && node --check eslint.config.js && node --check test/*.mjs",
+    "check": "npm run syntax && npm run lint",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^9.39.5"
+  }
 }
