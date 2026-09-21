@@ -142,14 +142,17 @@ function requestCollections(body) {
   // OpenAI Chat shape, then OpenAI Responses input (including its string form), then
   // translated Anthropic contents. This applies equally to the supported request wrapper.
   const messages = own(source, "messages");
-  if (Array.isArray(messages)) return [{ items: messages, stringInput: false }];
+  if (Array.isArray(messages) && messages.length > 0) return [{ items: messages, stringInput: false }];
   const input = own(source, "input");
-  if (Array.isArray(input)) return [{ items: input, stringInput: false }];
+  if (Array.isArray(input) && input.length > 0) return [{ items: input, stringInput: false }];
   // OpenAI Responses permits its top-level input to be a string. Unlike metadata
   // fields, that value is explicitly the end-user input and can carry intent.
-  if (typeof input === "string") return [{ items: [input], stringInput: true }];
+  if (typeof input === "string" && input.trim()) return [{ items: [input], stringInput: true }];
   const contents = own(source, "contents");
-  if (Array.isArray(contents)) return [{ items: contents, stringInput: false }];
+  if (Array.isArray(contents) && contents.length > 0) return [{ items: contents, stringInput: false }];
+  // Empty placeholders do not block a populated fallback shape. If every recognized
+  // representation is empty, inspect nothing so the existing empty-request hard route
+  // remains the deliberate fail-closed outcome.
   return [];
 }
 function inspectRequest(body) {
@@ -266,9 +269,12 @@ function classifyTaskComplexity(body, config = getConfig()) {
     for (const reason of latestMatches.strong) add(STRONG_WEIGHT, reason);
     for (const reason of latestMatches.gated) add(GATED_WEIGHT, reason);
     for (const reason of latestMatches.weak) add(WEAK_WEIGHT, reason);
+    // Keep historic semantic context helpful without allowing it alone to cross a
+    // user-configured hard threshold.
+    const historicalSemanticCap = Math.min(MAX_HISTORICAL_SEMANTIC_SCORE, Math.max(0, config.hardThreshold - 1));
     let historicalSemanticScore = 0;
     const addHistorical = (points, reason) => {
-      const contribution = Math.min(points, MAX_HISTORICAL_SEMANTIC_SCORE - historicalSemanticScore);
+      const contribution = Math.min(points, historicalSemanticCap - historicalSemanticScore);
       if (contribution > 0) {
         historicalSemanticScore += contribution;
         add(contribution, reason);
@@ -279,7 +285,7 @@ function classifyTaskComplexity(body, config = getConfig()) {
       for (const reason of previousMatches.strong) addHistorical(STRONG_WEIGHT / 3, reason);
       for (const reason of previousMatches.gated) addHistorical(GATED_WEIGHT / 3, reason);
       for (const reason of previousMatches.weak) addHistorical(WEAK_WEIGHT / 3, reason);
-      if (historicalSemanticScore === MAX_HISTORICAL_SEMANTIC_SCORE) break;
+      if (historicalSemanticScore === historicalSemanticCap) break;
     }
     score = Math.min(score, config.hardThreshold + 1);
     return { level: score >= config.hardThreshold ? "hard" : "easy", score, reasons: [...new Set(reasons)], metadata: { chars: state.chars, messages: state.messageCount, tools: tools.length, toolCalls: state.toolCalls, toolResults: state.toolResults, toolResultChars: state.toolResultChars, modalities: state.modalities } };

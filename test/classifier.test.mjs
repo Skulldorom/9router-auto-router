@@ -106,6 +106,13 @@ test("canonical request representation prevents translated duplicates from infla
   const inputWins = classifyTaskComplexity({ input: "Rename this input.", contents: [{ role: "user", parts: [{ text: translatedHard }] }] });
   assert.equal(inputWins.level, "easy");
   assert.equal(inputWins.metadata.messages, 1);
+  for (const body of [
+    { messages: [], input: translatedHard },
+    { messages: [], contents: [{ role: "user", parts: [{ text: translatedHard }] }] },
+    { input: [], contents: [{ role: "user", parts: [{ text: translatedHard }] }] },
+    { messages: [], input: [], contents: [{ role: "user", parts: [{ text: translatedHard }] }] },
+  ]) assert.equal(classifyTaskComplexity(body).level, "hard");
+  assert.equal(classifyTaskComplexity({ messages: [], input: [], contents: [] }).reasons.includes("empty-request"), true);
   assert.equal(classifyTaskComplexity({ request: duplicated }).metadata.messages, 1);
   const calls = [];
   await routeAutoCombo({ body: duplicated, comboName: "auto", comboStrategies: { auto: { autoRouter: { easyTarget: "easy", hardTarget: "hard" } } }, log: { info() {}, warn() {} }, delegate: (body, target) => { calls.push({ body, target }); return new Response("ok"); } });
@@ -122,6 +129,9 @@ test("historical semantic evidence is bounded below the hard threshold", () => {
   const oldDomains = Array.from({ length: 7 }, (_, index) => ({ role: "user", content: `Investigate security architecture permissions migration ${index}.` }));
   assert.equal(classifyTaskComplexity({ messages: [...oldDomains, { role: "user", content: "Change one label." }] }).level, "easy");
   assert.equal(classifyTaskComplexity({ messages: [{ role: "user", content: "Rename this button." }, { role: "user", content: "Fully audit this repository." }] }).level, "hard");
+  const customThreshold = classifyTaskComplexity({ messages: [{ role: "user", content: "Fully audit this repository." }, { role: "user", content: "Rename this button." }] }, { ...router.DEFAULTS, hardThreshold: 3 });
+  assert.equal(customThreshold.level, "easy");
+  assert.equal(customThreshold.score, 2);
 
   const followUp = { messages: [{ role: "user", content: "Investigate the concurrency race condition." }] };
   for (let index = 0; index < 4; index += 1) {

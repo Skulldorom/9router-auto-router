@@ -53,6 +53,34 @@ test("patcher dynamically discovers runtime and UI assets, patches once, and is 
   assert.match(patchedServerUi, /availableCombos:a\.map\(b=>\(\{name:b\.name,strategy:k\[b\.name\]\|\|\{\}\}\)\)/);
   assert.match(patchedServerUi, /filter\(b=>b\.name!==a\.name&&b\.strategy\.fallbackStrategy!=="auto"\)/);
 });
+test("patched numeric controls synchronize, validate, and save on blur", () => {
+  const dir = fixture();
+  assert.equal(spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" }).status, 0);
+  for (const [file, config, update, setter] of [
+    [path.join(dir, ".next/server/app/dashboard/combos/page.js"), "o", "p", "_arSetHard"],
+    [path.join(dir, ".next/static/chunks/app/dashboard/combos/page-hash.js"), "v", "A", "_arSetHard"],
+  ]) {
+    const source = fs.readFileSync(file, "utf8"), changes = [], state = { hard: "stale" };
+    const effect = source.match(new RegExp(`useEffect\\)\\(\\(\\)=>\\{([^}]*)\\},\\[${config}\\.hardThreshold,${config}\\.longContextChars,${config}\\.largeToolResultChars,${config}\\.manyTools\\]`));
+    const handlers = source.match(new RegExp(`onChange:([a-z])=>${setter}\\(\\1\\.target\\.value\\),onBlur:\\1=>\\{([^}]*)\\}`));
+    assert.ok(effect && handlers, `extract ${config} numeric behavior`);
+    const runEffect = new Function(config, setter, "_arSetContext", "_arSetToolResult", "_arSetTools", effect[1]);
+    const setHard = (value) => { state.hard = value; };
+    runEffect({ hardThreshold: 11, longContextChars: 24000, largeToolResultChars: 12000, manyTools: 16 }, setHard, () => {}, () => {}, () => {});
+    assert.equal(state.hard, "11");
+    const onChange = new Function(setter, `return ${handlers[1]}=>${setter}(${handlers[1]}.target.value)`)(setHard);
+    const onBlur = new Function(config, update, setter, `return ${handlers[1]}=>{${handlers[2]}}`)({ hardThreshold: 11 }, (key, value) => changes.push({ key, value }), setHard);
+    onChange({ target: { value: "8" } });
+    assert.equal(state.hard, "8");
+    onBlur({ target: { value: "8" } });
+    assert.deepEqual(changes, [{ key: "hardThreshold", value: 8 }]);
+    onChange({ target: { value: "0" } });
+    onBlur({ target: { value: "0" } });
+    assert.equal(state.hard, "11");
+    assert.equal(changes.length, 1);
+  }
+});
+
 test("patcher captures the models resolver before an inner rebinding shadow", () => {
   const dir = fixture({ shadow: true });
   const result = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
