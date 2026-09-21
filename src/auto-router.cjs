@@ -13,6 +13,8 @@ const TASK_ACTION_TERMS = [
 ];
 const STRONG_TASK_PHRASES = Object.freeze([
   { reason: "audit", terms: ["fully audit", "deep review"] },
+  { reason: "review", terms: ["review"] },
+  { reason: "trace", terms: ["trace"] },
   { reason: "concurrency", terms: ["race condition", "concurrency", "stale-write", "stale write"] },
   { reason: "root-cause", terms: ["root cause", "debug intermittent", "intermittent failing tests", "failing tests with unclear cause"] },
   { reason: "precision", terms: ["financial precision", "decimal precision"] },
@@ -29,6 +31,7 @@ const WEAK_DOMAIN_TERMS = Object.freeze([
 const STRONG_TERMS = new Set(STRONG_TASK_PHRASES.flatMap((group) => group.terms));
 const WEAK_TERMS = new Set([...GATED_STRUCTURAL_TERMS, ...WEAK_DOMAIN_TERMS].flatMap((group) => group.terms));
 const HARD_TERMS = [...STRONG_TERMS, ...WEAK_TERMS];
+const PUNCTUATED_PHRASES = new Set(HARD_TERMS.filter((term) => /\s/u.test(term)).map((term) => term.toLocaleLowerCase()));
 const STRONG_WEIGHT = 6;
 // Gated structural work ("plan a database migration") carries full weight once task
 // language is present; a lone security/architecture noun stays sub-threshold.
@@ -37,6 +40,7 @@ const WEAK_WEIGHT = 3;
 const activeAutoCombos = new WeakMap();
 const DEFAULTS = Object.freeze({ easyTarget: "coder", hardTarget: "coder-high", hardThreshold: 6, longContextChars: 24000, largeToolResultChars: 12000, manyTools: 16, verbose: false });
 const TEXT_FIELDS = new Set(["text", "content", "input_text", "output_text", "arguments", "output"]);
+const USER_TEXT_FIELDS = new Set(["text", "content", "input_text"]);
 const PART_FIELDS = new Set(["content", "parts", "input"]);
 const MODALITY_TYPES = new Set(["image_url", "input_image", "input_file", "file", "document", "input_audio", "input_video"]);
 
@@ -115,7 +119,7 @@ function userText(value, seen = new Set()) {
   seen.add(value);
   if (Array.isArray(value)) return value.map((item) => userText(item, seen)).join(" ");
   let text = "";
-  for (const key of TEXT_FIELDS) {
+  for (const key of USER_TEXT_FIELDS) {
     const child = own(value, key);
     if (typeof child === "string") text += ` ${child}`;
   }
@@ -128,15 +132,29 @@ function userText(value, seen = new Set()) {
 function requestCollections(body) {
   const nested = own(body, "request");
   const source = nested && typeof nested === "object" ? nested : body;
-  return ["messages", "input", "contents"].map((key) => own(source, key)).filter(Array.isArray);
+  const collections = [];
+  for (const key of ["messages", "contents"]) {
+    const items = own(source, key);
+    if (Array.isArray(items)) collections.push({ items, stringInput: false });
+  }
+  const input = own(source, "input");
+  if (Array.isArray(input)) collections.push({ items: input, stringInput: false });
+  // OpenAI Responses permits its top-level input to be a string. Unlike metadata
+  // fields, that value is explicitly the end-user input and can carry intent.
+  else if (typeof input === "string") collections.push({ items: [input], stringInput: true });
+  return collections;
 }
 function inspectRequest(body) {
   const state = { chars: 0, messageCount: 0, toolCalls: 0, toolResults: 0, toolResultChars: 0, modalities: 0, userTexts: [] };
   if (!body || typeof body !== "object" || Array.isArray(body)) return state;
-  for (const items of requestCollections(body)) {
+  for (const { items, stringInput } of requestCollections(body)) {
     state.messageCount += items.length;
     state.chars += contentLength(items, state);
     for (const item of items) {
+      if (stringInput) {
+        state.userTexts.push(item);
+        continue;
+      }
       if (isToolResult(item)) state.toolResults += 1;
       const calls = own(item, "tool_calls");
       if (own(item, "role") === "assistant" && (Array.isArray(calls) || own(item, "function_call"))) state.toolCalls += Array.isArray(calls) ? calls.length : 1;
@@ -148,15 +166,70 @@ function inspectRequest(body) {
   return state;
 }
 function normalizeTools(body) { return Array.isArray(own(body, "tools")) ? own(body, "tools") : Array.isArray(own(body, "functions")) ? own(body, "functions") : []; }
+function addIntentChunk(tokens, chunk, quoted) {
+  const normalized = chunk.toLocaleLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+  if (!normalized) return;
+  // Paths, filenames, snake_case, and camelCase identifiers stay atomic. Normal
+  // prose punctuation is split below, so `fully-audit` matches without exposing
+  // `plan` from `migration-plan.json` or an identifier such as `migrationPlan`.
+  if (/[._/\\]/u.test(normalized) || /\p{Ll}\p{M}*\p{Lu}/u.test(normalized)) {
+    tokens.push({ value: normalized, quoted });
+    return;
+  }
+  const parts = normalized.split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean);
+  const hasPunctuationSeparator = /[^\p{L}\p{N}\p{M}\s]/u.test(normalized);
+  if (hasPunctuationSeparator && parts.length > 1 && !PUNCTUATED_PHRASES.has(parts.join(" "))) {
+    tokens.push({ value: normalized, quoted });
+    return;
+  }
+  for (const part of parts) tokens.push({ value: part, quoted });
+}
+function intentTokens(text) {
+  const tokens = [];
+  let chunk = "", quote = null, escaped = false, quoted = false;
+  const flush = () => {
+    addIntentChunk(tokens, chunk, quoted);
+    chunk = "";
+  };
+  for (const character of text) {
+    if (quote) {
+      if (escaped) {
+        chunk += character;
+        escaped = false;
+      } else if (character === "\\") escaped = true;
+      else if (character === quote) {
+        flush();
+        quote = null;
+        quoted = false;
+      } else chunk += character;
+      continue;
+    }
+    if (character === '"' || character === "`" || character === "'") {
+      flush();
+      quote = character;
+      quoted = true;
+    } else if (/\s/u.test(character)) flush();
+    else chunk += character;
+  }
+  flush();
+  return tokens;
+}
+function termTokens(term) { return term.toLocaleLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean); }
+function hasTerm(tokens, term, allowQuoted = false) {
+  const phrase = termTokens(term);
+  return tokens.some((token, index) => phrase.every((part, offset) => tokens[index + offset]?.value === part && (allowQuoted || !tokens[index + offset].quoted)));
+}
 function keywordMatches(text) {
-  const normalized = text.toLowerCase();
-  const reasonsFor = (groups) => groups.filter((group) => group.terms.some((term) => normalized.includes(term))).map((group) => group.reason);
+  const tokens = intentTokens(text);
+  const reasonsFor = (groups, allowQuoted = false) => groups.filter((group) => group.terms.some((term) => hasTerm(tokens, term, allowQuoted))).map((group) => group.reason);
   const strong = reasonsFor(STRONG_TASK_PHRASES);
-  const taskOriented = TASK_ACTION_TERMS.some((term) => normalized.includes(term));
+  const taskOriented = TASK_ACTION_TERMS.some((term) => hasTerm(tokens, term));
   return {
     strong,
-    gated: taskOriented ? reasonsFor(GATED_STRUCTURAL_TERMS) : [],
-    weak: taskOriented ? reasonsFor(WEAK_DOMAIN_TERMS) : [],
+    // Quoted nouns remain inert by themselves. Once an unquoted action establishes
+    // task intent, quoted domain context is meaningful and receives normal weight.
+    gated: taskOriented ? reasonsFor(GATED_STRUCTURAL_TERMS, true) : [],
+    weak: taskOriented ? reasonsFor(WEAK_DOMAIN_TERMS, true) : [],
   };
 }
 

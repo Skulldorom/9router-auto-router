@@ -9,33 +9,21 @@ permissions:
   contents: read
 
 jobs:
-  test-build:
+  resolve-upstream:
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.upstream.outputs.digest }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-      - run: npm run check
-      - run: npm test
-      - name: Resolve current upstream image to an immutable digest
+      - id: upstream
         run: |
           set -eu
           docker buildx imagetools inspect decolua/9router:latest > upstream-inspect.txt
           digest=$(sed -n 's/^Digest:[[:space:]]*//p' upstream-inspect.txt | head -n1)
           test -n "$digest"
-          immutable_image="decolua/9router@${digest}"
-          docker pull "$immutable_image"
-          printf 'UPSTREAM_IMAGE=%s\nUPSTREAM_DIGEST=%s\n' "$immutable_image" "$digest" >> "$GITHUB_ENV"
-      - name: Compatibility check against the immutable current upstream image
-        run: ./scripts/check-upstream-compatibility.sh
-      - name: Build derived image from the validated immutable upstream image
-        run: docker build --build-arg UPSTREAM_IMAGE="$UPSTREAM_IMAGE" -t 9router-auto-router:ci .
-      - name: Docker smoke test
-        run: ./scripts/smoke-test.sh 9router-auto-router:ci
-      - name: Runtime response test
-        run: ./scripts/runtime-test.sh 9router-auto-router:ci
-      - name: Settings persistence integration test
-        run: ./scripts/settings-persistence-test.sh 9router-auto-router:ci
-      - name: Auto Router production HTTP integration test
-        run: ./scripts/auto-router-http-test.sh 9router-auto-router:ci
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+  validate:
+    needs: resolve-upstream
+    uses: ./.github/workflows/validate-image.yml
+    with:
+      upstream_digest: ${{ needs.resolve-upstream.outputs.digest }}
+      image_tag: 9router-auto-router:ci

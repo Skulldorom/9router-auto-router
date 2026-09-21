@@ -44,11 +44,14 @@ test("patcher dynamically discovers runtime and UI assets, patches once, and is 
   assert.match(patchedUi, /hardTarget/);
   assert.match(patchedUi, /hardThreshold/); assert.match(patchedUi, /defaultValue:o?\.?hardThreshold|defaultValue:v\.hardThreshold/); assert.ok(!patchedUi.includes("value:v.hardThreshold"));
   for (const label of ["Easy target", "Hard target", "Advanced", "Hard threshold", "Long context threshold (characters)", "Large tool-result threshold (characters)", "Many-tools threshold", "Verbose logging"]) assert.ok(patchedUi.includes(label));
-  assert.match(patchedUi, /availableCombos:e\.map/); assert.match(patchedUi, /filter\(t=>t!==e\.name\)/);
-  assert.match(patchedUi, /\(missing\)/); assert.match(patchedUi, /disabled:!0/);
+  assert.match(patchedUi, /availableCombos:e\.map\(t=>\(\{name:t\.name,strategy:y\[t\.name\]\|\|\{\}\}\)\)/);
+  assert.match(patchedUi, /filter\(t=>t\.name!==e\.name&&t\.strategy\.fallbackStrategy!=="auto"\)/);
+  assert.match(patchedUi, /missing or Auto Router — unsupported target/); assert.match(patchedUi, /disabled:!0/);
   const patchedServerUi = fs.readFileSync(path.join(dir, ".next/server/app/dashboard/combos/page.js"), "utf8");
   for (const label of ["Easy target", "Hard target", "Advanced", "Hard threshold", "Long context threshold (characters)", "Large tool-result threshold (characters)", "Many-tools threshold", "Verbose logging"]) assert.ok(patchedServerUi.includes(label));
-  assert.match(patchedServerUi, /defaultValue:o.hardThreshold/); assert.ok(!patchedServerUi.includes("value:o.hardThreshold")); assert.match(patchedServerUi, /availableCombos:a\.map/); assert.match(patchedServerUi, /filter\(b=>b!==a\.name\)/);
+  assert.match(patchedServerUi, /defaultValue:o.hardThreshold/); assert.ok(!patchedServerUi.includes("value:o.hardThreshold"));
+  assert.match(patchedServerUi, /availableCombos:a\.map\(b=>\(\{name:b\.name,strategy:k\[b\.name\]\|\|\{\}\}\)\)/);
+  assert.match(patchedServerUi, /filter\(b=>b\.name!==a\.name&&b\.strategy\.fallbackStrategy!=="auto"\)/);
 });
 test("patcher captures the models resolver before an inner rebinding shadow", () => {
   const dir = fixture({ shadow: true });

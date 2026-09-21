@@ -1,0 +1,93 @@
+name: Validate derived image
+
+on:
+  workflow_call:
+    inputs:
+      upstream_digest:
+        description: Immutable upstream sha256 digest
+        required: true
+        type: string
+      image_tag:
+        description: Local tag for the validated image
+        required: true
+        type: string
+      upload_image:
+        description: Upload the tested image for a same-run trusted publish job
+        required: false
+        default: false
+        type: boolean
+    outputs:
+      revision:
+        value: ${{ jobs.validate.outputs.revision }}
+      upstream_digest:
+        value: ${{ jobs.validate.outputs.upstream_digest }}
+      upstream_version:
+        value: ${{ jobs.validate.outputs.upstream_version }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      revision: ${{ steps.metadata.outputs.revision }}
+      upstream_digest: ${{ steps.metadata.outputs.upstream_digest }}
+      upstream_version: ${{ steps.metadata.outputs.upstream_version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Validate immutable upstream digest and local image tag
+        env:
+          RESOLVED_UPSTREAM_DIGEST: ${{ inputs.upstream_digest }}
+          VALIDATED_IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -eu
+          printf '%s' "$RESOLVED_UPSTREAM_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$' || {
+            echo "Invalid immutable upstream digest." >&2
+            exit 1
+          }
+          case "$VALIDATED_IMAGE_TAG" in
+            9router-auto-router:ci|9router-auto-router:validated) ;;
+            *) echo "Invalid local validation image tag." >&2; exit 1 ;;
+          esac
+      - run: npm run check
+      - run: npm test
+      - id: metadata
+        name: Pull selected immutable upstream image
+        env:
+          RESOLVED_UPSTREAM_DIGEST: ${{ inputs.upstream_digest }}
+        run: |
+          set -eu
+          immutable_image="decolua/9router@${RESOLVED_UPSTREAM_DIGEST}"
+          docker pull "$immutable_image"
+          version=$(docker image inspect "$immutable_image" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')
+          [ -n "$version" ] || version=unknown
+          printf 'revision=%s\nupstream_digest=%s\nupstream_version=%s\n' "$GITHUB_SHA" "$RESOLVED_UPSTREAM_DIGEST" "$version" >> "$GITHUB_OUTPUT"
+          printf 'UPSTREAM_IMAGE=%s\nUPSTREAM_DIGEST=%s\nUPSTREAM_VERSION=%s\n' "$immutable_image" "$RESOLVED_UPSTREAM_DIGEST" "$version" >> "$GITHUB_ENV"
+      - run: ./scripts/check-upstream-compatibility.sh
+      - name: Build derived image from the validated immutable upstream image
+        run: |
+          docker build \
+            --build-arg UPSTREAM_IMAGE="$UPSTREAM_IMAGE" \
+            --build-arg AUTO_ROUTER_REVISION="$GITHUB_SHA" \
+            --build-arg UPSTREAM_IMAGE_NAME="decolua/9router:latest" \
+            --build-arg UPSTREAM_DIGEST="$UPSTREAM_DIGEST" \
+            --build-arg UPSTREAM_VERSION="$UPSTREAM_VERSION" \
+            --build-arg BUILD_CREATED="$(date --utc +%Y-%m-%dT%H:%M:%SZ)" \
+            --tag "${{ inputs.image_tag }}" .
+      - run: ./scripts/smoke-test.sh "${{ inputs.image_tag }}"
+      - run: ./scripts/runtime-test.sh "${{ inputs.image_tag }}"
+      - run: ./scripts/settings-persistence-test.sh "${{ inputs.image_tag }}"
+      - run: ./scripts/auto-router-http-test.sh "${{ inputs.image_tag }}"
+      - name: Save validated image for the trusted publish job
+        if: inputs.upload_image
+        run: docker save "${{ inputs.image_tag }}" | gzip > validated-image.tar.gz
+      - if: inputs.upload_image
+        uses: actions/upload-artifact@v7
+        with:
+          name: validated-image
+          path: validated-image.tar.gz
+          retention-days: 1
