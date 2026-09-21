@@ -1,0 +1,23 @@
+[
+  {"level":"easy","prompt":"Change one condition in src/auth.js."},
+  {"level":"easy","prompt":"Rename the Save button to Apply."},
+  {"level":"easy","prompt":"Update the help text below this field."},
+  {"level":"easy","prompt":"Set the timeout to 30 in config.json."},
+  {"level":"easy","prompt":"Rename the \"review\" menu item."},
+  {"level":"easy","prompt":"Change the \"security\" heading text."},
+  {"level":"easy","prompt":"Update docs/migration-plan.json."},
+  {"level":"easy","prompt":"Rename reviewStatus to approvalStatus."},
+  {"level":"easy","prompt":"What does this function return?"},
+  {"level":"easy","prompt":"Fix the typo in this isolated validation error."},
+  {"level":"easy","prompt":"Rename the review-status field."},
+  {"level":"hard","prompt":"Perform a repository-wide audit of the routing policy."},
+  {"level":"hard","prompt":"Do a deep-review of this implementation."},
+  {"level":"hard","prompt":"Investigate a concurrency race-condition."},
+  {"level":"hard","prompt":"Design the architecture for the new worker system."},
+  {"level":"hard","prompt":"Plan a database migration with rollback safety."},
+  {"level":"hard","prompt":"Fully audit authentication and permissions."},
+  {"level":"hard","prompt":"Diagnose intermittent failing tests with an unclear cause."},
+  {"level":"hard","prompt":"Investigate financial decimal precision errors."},
+  {"level":"hard","prompt":"Refactor this multi-file module."},
+  {"level":"hard","prompt":"Find the root-cause of this production failure."}
+]

@@ -97,8 +97,9 @@ printf '%s' "$hard_body" | grep -q 'tools.*ping' || { echo "Hard delegation lost
 printf '%s' "$hard_body" | grep -q 'stream.*true' || { echo "Hard delegation changed stream: ${hard_body}" >&2; exit 1; }
 
 logs=$(docker logs "$NAME" 2>&1)
-printf '%s' "$logs" | grep -q 'AUTO-ROUTER] agent → easy' || { printf '%s\n' "$logs" >&2; exit 1; }
-printf '%s' "$logs" | grep -q 'AUTO-ROUTER] agent → hard' || { printf '%s\n' "$logs" >&2; exit 1; }
+printf '%s' "$logs" | grep -q 'AUTO-ROUTER] combo=agent level=easy target=easy score=.* reasons=' || { printf '%s\n' "$logs" >&2; exit 1; }
+printf '%s' "$logs" | grep -q 'AUTO-ROUTER] combo=agent level=hard target=hard score=.* reasons=' || { printf '%s\n' "$logs" >&2; exit 1; }
+printf '%s' "$logs" | grep -q 'sentinel-easy\|sentinel-hard' && { echo 'Auto Router logs leaked request content.' >&2; exit 1; }
 printf '%s' "$logs" | grep -q 'Combo "easy" with 1 models' || { printf '%s\n' "$logs" >&2; exit 1; }
 printf '%s' "$logs" | grep -q 'Combo "hard" with 1 models' || { printf '%s\n' "$logs" >&2; exit 1; }
 printf '%s' "$logs" | grep -q '\[COMBO\] Trying model 1/1: ollama-local/easy-model' || { printf '%s\n' "$logs" >&2; exit 1; }
