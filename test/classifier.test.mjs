@@ -56,6 +56,47 @@ test("OpenAI Responses and Anthropic-shaped bodies are inspected", () => {
   assert.equal(classifyTaskComplexity({ model: "coder-auto", input: [{ role: "user", content: [{ type: "input_text", text: "deep review this architecture" }] }] }).level, "hard");
   assert.equal(classifyTaskComplexity({ model: "coder-auto", contents: [{ role: "user", parts: [{ text: "small edit" }] }] }).level, "easy");
 });
+
+test("action matching uses whole intent tokens and ignores quoted labels", () => {
+  for (const prompt of [
+    "Rename the migrationPlan field.",
+    "Change ArchitecturePreview to ArchitectureView.",
+    "Update template migration-plan.json.",
+    "Rename resolveMigrationState.",
+    "Rename reviewStatus to approvalStatus.",
+    "Change auditLabel to activityLabel.",
+  ]) {
+    const result = classifyTaskComplexity(message(prompt));
+    assert.equal(result.level, "easy", prompt);
+    assert.ok(result.score < 6, prompt);
+  }
+  for (const prompt of [
+    "Fully audit this repository.",
+    "Review this implementation.",
+    "Plan a database migration.",
+    "Trace this request through the service.",
+    "Resolve this concurrency issue.",
+  ]) assert.equal(classifyTaskComplexity(message(prompt)).level, "hard", prompt);
+});
+
+test("supported request formats extract only explicit user intent", () => {
+  const hard = "Fully audit this repository for concurrency bugs.";
+  const simple = "Rename this button.";
+  const noisy = "audit security architecture migration concurrency";
+  const formats = [
+    (request) => ({ messages: [{ role: "system", content: noisy }, { role: "assistant", content: noisy }, { role: "tool", content: noisy }, { role: "user", content: request }] }),
+    (request) => ({ input: [{ role: "system", content: [{ type: "input_text", text: noisy }] }, { role: "assistant", content: [{ type: "output_text", text: noisy }] }, { type: "function_call_output", output: noisy }, { role: "user", content: [{ type: "input_text", text: request }] }] }),
+    (request) => ({ contents: [{ role: "system", parts: [{ text: noisy }] }, { role: "assistant", parts: [{ text: noisy }] }, { role: "user", parts: [{ text: request }] }] }),
+    (request) => ({ request: { messages: [{ role: "system", content: noisy }, { role: "user", content: "Rename a previous label." }, { role: "assistant", tool_calls: [{ id: "call", type: "function", function: { name: "terminal", arguments: noisy } }] }, { role: "tool", content: noisy }, { role: "user", content: request }] }, metadata: { prompt: noisy } }),
+  ];
+  for (const format of formats) {
+    assert.equal(classifyTaskComplexity(format(simple)).level, "easy");
+    assert.equal(classifyTaskComplexity(format(hard)).level, "hard");
+  }
+  assert.equal(classifyTaskComplexity({ input: hard }).level, "hard");
+  assert.equal(classifyTaskComplexity({ input: simple }).level, "easy");
+});
+
 test("malformed and empty requests safely choose hard without rejecting sparse requests", () => {
   assert.equal(classifyTaskComplexity(null).level, "hard"); assert.equal(classifyTaskComplexity({}).level, "hard");
   assert.equal(classifyTaskComplexity({ model: "coder-auto", messages: [{ role: "user", content: "ok" }] }).level, "easy");

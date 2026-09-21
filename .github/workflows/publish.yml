@@ -60,62 +60,11 @@ jobs:
   validate:
     needs: should-build
     if: needs.should-build.outputs.build == 'true'
-    runs-on: ubuntu-latest
-    outputs:
-      revision: ${{ steps.metadata.outputs.revision }}
-      upstream_digest: ${{ steps.metadata.outputs.upstream_digest }}
-      upstream_version: ${{ steps.metadata.outputs.upstream_version }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-      - name: Static checks
-        run: npm run check
-      - name: Unit, classifier, and routing tests
-        run: npm test
-      - id: metadata
-        name: Pull selected immutable upstream image
-        env:
-          RESOLVED_UPSTREAM_DIGEST: ${{ needs.should-build.outputs.upstream_digest }}
-        run: |
-          set -eu
-          test -n "$RESOLVED_UPSTREAM_DIGEST"
-          immutable_image="decolua/9router@${RESOLVED_UPSTREAM_DIGEST}"
-          docker pull "$immutable_image"
-          version=$(docker image inspect "$immutable_image" --format '{{ index .Config.Labels "org.opencontainers.image.version" }}')
-          [ -n "$version" ] || version=unknown
-          printf 'revision=%s\nupstream_digest=%s\nupstream_version=%s\n' "$GITHUB_SHA" "$RESOLVED_UPSTREAM_DIGEST" "$version" >> "$GITHUB_OUTPUT"
-          printf 'UPSTREAM_IMAGE=%s\nUPSTREAM_DIGEST=%s\nUPSTREAM_VERSION=%s\n' "$immutable_image" "$RESOLVED_UPSTREAM_DIGEST" "$version" >> "$GITHUB_ENV"
-      - name: Compatibility check against the immutable upstream image
-        run: ./scripts/check-upstream-compatibility.sh
-      - name: Build derived image from the validated immutable upstream image
-        run: |
-          docker build \
-            --build-arg UPSTREAM_IMAGE="$UPSTREAM_IMAGE" \
-            --build-arg AUTO_ROUTER_REVISION="$GITHUB_SHA" \
-            --build-arg UPSTREAM_IMAGE_NAME="decolua/9router:latest" \
-            --build-arg UPSTREAM_DIGEST="$UPSTREAM_DIGEST" \
-            --build-arg UPSTREAM_VERSION="$UPSTREAM_VERSION" \
-            --build-arg BUILD_CREATED="$(date --utc +%Y-%m-%dT%H:%M:%SZ)" \
-            --tag 9router-auto-router:validated .
-      - name: Docker smoke test
-        run: ./scripts/smoke-test.sh 9router-auto-router:validated
-      - name: Runtime response test
-        run: ./scripts/runtime-test.sh 9router-auto-router:validated
-      - name: Settings persistence integration test
-        run: ./scripts/settings-persistence-test.sh 9router-auto-router:validated
-      - name: Auto Router production HTTP integration test
-        run: ./scripts/auto-router-http-test.sh 9router-auto-router:validated
-      - name: Save validated image for the publish job
-        run: docker save 9router-auto-router:validated | gzip > validated-image.tar.gz
-      - uses: actions/upload-artifact@v7
-        with:
-          name: validated-image
-          path: validated-image.tar.gz
-          retention-days: 1
+    uses: ./.github/workflows/validate-image.yml
+    with:
+      upstream_digest: ${{ needs.should-build.outputs.upstream_digest }}
+      image_tag: 9router-auto-router:validated
+      upload_image: true
 
   publish:
     needs: validate
@@ -158,19 +107,19 @@ jobs:
         run: |
           set -eu
           short_revision=$(printf '%s' "$REVISION" | cut -c1-12)
-          tags="sha-${short_revision}"
+          tags="sha-${REVISION} sha-${short_revision}"
           if [ "$UPSTREAM_VERSION" != unknown ]; then
-            tags="$tags 9router-${UPSTREAM_VERSION}-sha-${short_revision}"
+            tags="$tags 9router-${UPSTREAM_VERSION}-sha-${REVISION} 9router-${UPSTREAM_VERSION}-sha-${short_revision}"
           fi
           for tag in $tags; do
             existing=$(docker buildx imagetools inspect "${IMAGE_NAME}:${tag}" 2>/dev/null || true)
             if [ -n "$existing" ]; then
               existing_revision=$(printf '%s\n' "$existing" | sed -n 's/^[[:space:]]*org.opencontainers.image.revision:[[:space:]]*//p' | head -n1)
               existing_upstream=$(printf '%s\n' "$existing" | sed -n 's/^[[:space:]]*io.github.skulldorom.9router-auto-router.upstream.digest:[[:space:]]*//p' | head -n1)
-              [ "$existing_revision" = "$REVISION" ] && [ "$existing_upstream" = "$UPSTREAM_DIGEST" ] || {
+              if [ "$existing_revision" != "$REVISION" ] || [ "$existing_upstream" != "$UPSTREAM_DIGEST" ]; then
                 echo "Immutable tag ${tag} already identifies a different image." >&2
                 exit 1
-              }
+              fi
             else
               docker tag 9router-auto-router:validated "${IMAGE_NAME}:${tag}"
               docker push "${IMAGE_NAME}:${tag}"

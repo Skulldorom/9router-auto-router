@@ -13,6 +13,8 @@ const TASK_ACTION_TERMS = [
 ];
 const STRONG_TASK_PHRASES = Object.freeze([
   { reason: "audit", terms: ["fully audit", "deep review"] },
+  { reason: "review", terms: ["review"] },
+  { reason: "trace", terms: ["trace"] },
   { reason: "concurrency", terms: ["race condition", "concurrency", "stale-write", "stale write"] },
   { reason: "root-cause", terms: ["root cause", "debug intermittent", "intermittent failing tests", "failing tests with unclear cause"] },
   { reason: "precision", terms: ["financial precision", "decimal precision"] },
@@ -37,6 +39,7 @@ const WEAK_WEIGHT = 3;
 const activeAutoCombos = new WeakMap();
 const DEFAULTS = Object.freeze({ easyTarget: "coder", hardTarget: "coder-high", hardThreshold: 6, longContextChars: 24000, largeToolResultChars: 12000, manyTools: 16, verbose: false });
 const TEXT_FIELDS = new Set(["text", "content", "input_text", "output_text", "arguments", "output"]);
+const USER_TEXT_FIELDS = new Set(["text", "content", "input_text"]);
 const PART_FIELDS = new Set(["content", "parts", "input"]);
 const MODALITY_TYPES = new Set(["image_url", "input_image", "input_file", "file", "document", "input_audio", "input_video"]);
 
@@ -115,7 +118,7 @@ function userText(value, seen = new Set()) {
   seen.add(value);
   if (Array.isArray(value)) return value.map((item) => userText(item, seen)).join(" ");
   let text = "";
-  for (const key of TEXT_FIELDS) {
+  for (const key of USER_TEXT_FIELDS) {
     const child = own(value, key);
     if (typeof child === "string") text += ` ${child}`;
   }
@@ -128,15 +131,29 @@ function userText(value, seen = new Set()) {
 function requestCollections(body) {
   const nested = own(body, "request");
   const source = nested && typeof nested === "object" ? nested : body;
-  return ["messages", "input", "contents"].map((key) => own(source, key)).filter(Array.isArray);
+  const collections = [];
+  for (const key of ["messages", "contents"]) {
+    const items = own(source, key);
+    if (Array.isArray(items)) collections.push({ items, stringInput: false });
+  }
+  const input = own(source, "input");
+  if (Array.isArray(input)) collections.push({ items: input, stringInput: false });
+  // OpenAI Responses permits its top-level input to be a string. Unlike metadata
+  // fields, that value is explicitly the end-user input and can carry intent.
+  else if (typeof input === "string") collections.push({ items: [input], stringInput: true });
+  return collections;
 }
 function inspectRequest(body) {
   const state = { chars: 0, messageCount: 0, toolCalls: 0, toolResults: 0, toolResultChars: 0, modalities: 0, userTexts: [] };
   if (!body || typeof body !== "object" || Array.isArray(body)) return state;
-  for (const items of requestCollections(body)) {
+  for (const { items, stringInput } of requestCollections(body)) {
     state.messageCount += items.length;
     state.chars += contentLength(items, state);
     for (const item of items) {
+      if (stringInput) {
+        state.userTexts.push(item);
+        continue;
+      }
       if (isToolResult(item)) state.toolResults += 1;
       const calls = own(item, "tool_calls");
       if (own(item, "role") === "assistant" && (Array.isArray(calls) || own(item, "function_call"))) state.toolCalls += Array.isArray(calls) ? calls.length : 1;
@@ -148,11 +165,40 @@ function inspectRequest(body) {
   return state;
 }
 function normalizeTools(body) { return Array.isArray(own(body, "tools")) ? own(body, "tools") : Array.isArray(own(body, "functions")) ? own(body, "functions") : []; }
+function intentTokens(text) {
+  const tokens = [];
+  let token = "", quote = null, escaped = false;
+  const flush = () => {
+    const normalized = token.toLocaleLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (normalized) tokens.push(normalized);
+    token = "";
+  };
+  for (const character of text) {
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === '"' || character === "`" || character === "'") {
+      flush();
+      quote = character;
+    } else if (/\s/u.test(character)) flush();
+    else token += character;
+  }
+  flush();
+  return tokens;
+}
+function termTokens(term) { return term.toLocaleLowerCase().split(/\s+/u); }
+function hasTerm(tokens, term) {
+  const phrase = termTokens(term);
+  return tokens.some((token, index) => phrase.every((part, offset) => tokens[index + offset] === part));
+}
 function keywordMatches(text) {
-  const normalized = text.toLowerCase();
-  const reasonsFor = (groups) => groups.filter((group) => group.terms.some((term) => normalized.includes(term))).map((group) => group.reason);
+  const tokens = intentTokens(text);
+  const reasonsFor = (groups) => groups.filter((group) => group.terms.some((term) => hasTerm(tokens, term))).map((group) => group.reason);
   const strong = reasonsFor(STRONG_TASK_PHRASES);
-  const taskOriented = TASK_ACTION_TERMS.some((term) => normalized.includes(term));
+  const taskOriented = TASK_ACTION_TERMS.some((term) => hasTerm(tokens, term));
   return {
     strong,
     gated: taskOriented ? reasonsFor(GATED_STRUCTURAL_TERMS) : [],
