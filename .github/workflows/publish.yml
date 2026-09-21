@@ -78,18 +78,25 @@ jobs:
           name: validated-image
       - name: Load the tested image
         run: gzip --decompress --stdout validated-image.tar.gz | docker load
-      - name: Refuse to let a stale run replace a newer release
+      - name: Refuse stale source or upstream validation
         id: current
         env:
           REVISION: ${{ needs.validate.outputs.revision }}
+          VALIDATED_UPSTREAM_DIGEST: ${{ needs.validate.outputs.upstream_digest }}
         run: |
           set -eu
-          current=$(git ls-remote https://github.com/Skulldorom/9router-auto-router.git refs/heads/main | cut -f1)
-          if [ "$current" = "$REVISION" ]; then
-            echo 'publish=true' >> "$GITHUB_OUTPUT"
-          else
-            echo "Validated ${REVISION}, but main is now ${current}; a newer run owns latest."
+          current_revision=$(git ls-remote https://github.com/Skulldorom/9router-auto-router.git refs/heads/main | cut -f1)
+          docker buildx imagetools inspect "$UPSTREAM_IMAGE" > upstream-inspect.txt
+          current_upstream=$(sed -n 's/^Digest:[[:space:]]*//p' upstream-inspect.txt | head -n1)
+          test -n "$current_upstream"
+          if [ "$current_revision" != "$REVISION" ]; then
+            echo "Validated ${REVISION}, but main is now ${current_revision}; a newer run owns latest."
             echo 'publish=false' >> "$GITHUB_OUTPUT"
+          elif [ "$current_upstream" != "$VALIDATED_UPSTREAM_DIGEST" ]; then
+            echo "Validated upstream ${VALIDATED_UPSTREAM_DIGEST}, but ${UPSTREAM_IMAGE} is now ${current_upstream}; skip latest until a new run validates it."
+            echo 'publish=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'publish=true' >> "$GITHUB_OUTPUT"
           fi
       - name: Authenticate to GHCR after validation
         if: steps.current.outputs.publish == 'true'

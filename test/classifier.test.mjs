@@ -81,6 +81,57 @@ test("OpenAI Responses and Anthropic-shaped bodies are inspected", () => {
   assert.equal(classifyTaskComplexity({ model: "coder-auto", contents: [{ role: "user", parts: [{ text: "small edit" }] }] }).level, "easy");
 });
 
+test("canonical request representation prevents translated duplicates from inflating complexity", async () => {
+  const simple = "Rename this button.";
+  const translatedHard = "Fully audit this repository for a concurrency race condition.";
+  const duplicated = {
+    messages: [{ role: "user", content: simple }],
+    input: [
+      { role: "user", content: [{ type: "input_text", text: translatedHard }] },
+      { role: "assistant", tool_calls: Array.from({ length: 8 }, (_, index) => ({ id: `call-${index}` })) },
+      ...Array.from({ length: 8 }, () => ({ type: "function_call_output", output: "x".repeat(4000) })),
+    ],
+    contents: [{ role: "user", parts: [{ type: "input_image", image_url: { url: "https://example.invalid/large.png" } }, { text: translatedHard }] }],
+  };
+  const result = classifyTaskComplexity(duplicated);
+  assert.equal(result.level, "easy");
+  assert.equal(result.metadata.messages, 1);
+  assert.equal(result.metadata.chars, simple.length);
+  assert.equal(result.metadata.toolCalls, 0);
+  assert.equal(result.metadata.toolResults, 0);
+  assert.equal(result.metadata.toolResultChars, 0);
+  assert.equal(result.metadata.modalities, 0);
+  assert.ok(!result.reasons.includes("audit"));
+
+  const inputWins = classifyTaskComplexity({ input: "Rename this input.", contents: [{ role: "user", parts: [{ text: translatedHard }] }] });
+  assert.equal(inputWins.level, "easy");
+  assert.equal(inputWins.metadata.messages, 1);
+  assert.equal(classifyTaskComplexity({ request: duplicated }).metadata.messages, 1);
+  const calls = [];
+  await routeAutoCombo({ body: duplicated, comboName: "auto", comboStrategies: { auto: { autoRouter: { easyTarget: "easy", hardTarget: "hard" } } }, log: { info() {}, warn() {} }, delegate: (body, target) => { calls.push({ body, target }); return new Response("ok"); } });
+  assert.deepEqual(calls, [{ body: duplicated, target: "easy" }]);
+});
+
+test("historical semantic evidence is bounded below the hard threshold", () => {
+  const oldAudit = Array.from({ length: 7 }, (_, index) => ({ role: "user", content: `Fully audit architecture security migration ${index}.` }));
+  const trivial = { messages: [...oldAudit, { role: "user", content: "Rename this button." }] };
+  const result = classifyTaskComplexity(trivial);
+  assert.equal(result.level, "easy");
+  assert.equal(result.score, 5);
+
+  const oldDomains = Array.from({ length: 7 }, (_, index) => ({ role: "user", content: `Investigate security architecture permissions migration ${index}.` }));
+  assert.equal(classifyTaskComplexity({ messages: [...oldDomains, { role: "user", content: "Change one label." }] }).level, "easy");
+  assert.equal(classifyTaskComplexity({ messages: [{ role: "user", content: "Rename this button." }, { role: "user", content: "Fully audit this repository." }] }).level, "hard");
+
+  const followUp = { messages: [{ role: "user", content: "Investigate the concurrency race condition." }] };
+  for (let index = 0; index < 4; index += 1) {
+    followUp.messages.push({ role: "assistant", tool_calls: [{ id: `call-${index}` }] });
+    followUp.messages.push({ role: "tool", content: "result ".repeat(2500) });
+  }
+  followUp.messages.push({ role: "user", content: "continue" });
+  assert.equal(classifyTaskComplexity(followUp).level, "hard");
+});
+
 test("action matching uses whole intent tokens and ignores quoted labels", () => {
   for (const prompt of [
     "Rename the migrationPlan field.",

@@ -27,5 +27,18 @@
   {"level":"hard","prompt":"Run a substantial performance investigation before changing the cache."},
   {"level":"hard","prompt":"Investigate \"authentication architecture\" for vulnerabilities."},
   {"level":"hard","prompt":"fully-audit the repository before release."},
-  {"level":"hard","prompt":"fully: audit the repository before release."}
+  {"level":"hard","prompt":"fully: audit the repository before release."},
+  {"level":"easy","prompt":"Correct the spelling in docs/permissions.md."},
+  {"level":"easy","prompt":"Set enableAuditLabel to false in config.json."},
+  {"level":"easy","prompt":"Rename authenticateUser to signInUser."},
+  {"level":"easy","prompt":"Change architecturePreview to systemPreview."},
+  {"level":"easy","prompt":"Update the \"Security\" tab title."},
+  {"level":"easy","prompt":"Fix punctuation in the migration notes."},
+  {"level":"easy","prompt":"continue"},
+  {"level":"hard","prompt":"Review the repository-wide authorization implementation."},
+  {"level":"hard","prompt":"Plan the payments schema migration with a tested rollback."},
+  {"level":"hard","prompt":"Debug intermittent failing tests in production."},
+  {"level":"hard","prompt":"Investigate a race condition in cache invalidation."},
+  {"level":"hard","prompt":"Analyze financial precision in invoice totals."},
+  {"level":"hard","prompt":"Refactor this multi-file request pipeline."}
 ]

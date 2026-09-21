@@ -34,6 +34,10 @@ const WEAK_TERMS = new Set([...GATED_STRUCTURAL_TERMS, ...WEAK_DOMAIN_TERMS].fla
 const HARD_TERMS = [...STRONG_TERMS, ...WEAK_TERMS];
 const PUNCTUATED_PHRASES = new Set(HARD_TERMS.map((term) => term.toLocaleLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean)).filter((parts) => parts.length > 1).map((parts) => parts.join(" ")));
 const STRONG_WEIGHT = 6;
+// Previous user turns are corroborating context, never an accumulating substitute for
+// the current request. Their combined semantic contribution stays below the default
+// hard threshold; structural history can still route a substantial follow-up hard.
+const MAX_HISTORICAL_SEMANTIC_SCORE = 4;
 // Gated structural work ("plan a database migration") carries full weight once task
 // language is present; a lone security/architecture noun stays sub-threshold.
 const GATED_WEIGHT = 6;
@@ -133,17 +137,20 @@ function userText(value, seen = new Set()) {
 function requestCollections(body) {
   const nested = own(body, "request");
   const source = nested && typeof nested === "object" ? nested : body;
-  const collections = [];
-  for (const key of ["messages", "contents"]) {
-    const items = own(source, key);
-    if (Array.isArray(items)) collections.push({ items, stringInput: false });
-  }
+  // Adapters can preserve an original request beside a normalized translation. Those
+  // fields describe one conversation, not additive conversations. Prefer the native
+  // OpenAI Chat shape, then OpenAI Responses input (including its string form), then
+  // translated Anthropic contents. This applies equally to the supported request wrapper.
+  const messages = own(source, "messages");
+  if (Array.isArray(messages)) return [{ items: messages, stringInput: false }];
   const input = own(source, "input");
-  if (Array.isArray(input)) collections.push({ items: input, stringInput: false });
+  if (Array.isArray(input)) return [{ items: input, stringInput: false }];
   // OpenAI Responses permits its top-level input to be a string. Unlike metadata
   // fields, that value is explicitly the end-user input and can carry intent.
-  else if (typeof input === "string") collections.push({ items: [input], stringInput: true });
-  return collections;
+  if (typeof input === "string") return [{ items: [input], stringInput: true }];
+  const contents = own(source, "contents");
+  if (Array.isArray(contents)) return [{ items: contents, stringInput: false }];
+  return [];
 }
 function inspectRequest(body) {
   const state = { chars: 0, messageCount: 0, toolCalls: 0, toolResults: 0, toolResultChars: 0, modalities: 0, userTexts: [] };
@@ -259,11 +266,20 @@ function classifyTaskComplexity(body, config = getConfig()) {
     for (const reason of latestMatches.strong) add(STRONG_WEIGHT, reason);
     for (const reason of latestMatches.gated) add(GATED_WEIGHT, reason);
     for (const reason of latestMatches.weak) add(WEAK_WEIGHT, reason);
+    let historicalSemanticScore = 0;
+    const addHistorical = (points, reason) => {
+      const contribution = Math.min(points, MAX_HISTORICAL_SEMANTIC_SCORE - historicalSemanticScore);
+      if (contribution > 0) {
+        historicalSemanticScore += contribution;
+        add(contribution, reason);
+      }
+    };
     for (const previous of state.userTexts.slice(0, -1)) {
       const previousMatches = keywordMatches(previous);
-      for (const reason of previousMatches.strong) add(STRONG_WEIGHT / 3, reason);
-      for (const reason of previousMatches.gated) add(GATED_WEIGHT / 3, reason);
-      for (const reason of previousMatches.weak) add(WEAK_WEIGHT / 3, reason);
+      for (const reason of previousMatches.strong) addHistorical(STRONG_WEIGHT / 3, reason);
+      for (const reason of previousMatches.gated) addHistorical(GATED_WEIGHT / 3, reason);
+      for (const reason of previousMatches.weak) addHistorical(WEAK_WEIGHT / 3, reason);
+      if (historicalSemanticScore === MAX_HISTORICAL_SEMANTIC_SCORE) break;
     }
     score = Math.min(score, config.hardThreshold + 1);
     return { level: score >= config.hardThreshold ? "hard" : "easy", score, reasons: [...new Set(reasons)], metadata: { chars: state.chars, messages: state.messageCount, tools: tools.length, toolCalls: state.toolCalls, toolResults: state.toolResults, toolResultChars: state.toolResultChars, modalities: state.modalities } };
