@@ -163,9 +163,15 @@ services:
         condition: service_started
 
   headroom:
-    image: ghcr.io/headroomlabs-ai/headroom:latest
-    command: headroom proxy --host 0.0.0.0 --port 8787
+    image: ghcr.io/chopratejas/headroom:latest
+    container_name: headroom
     restart: unless-stopped
+
+    # You don't actually need to expose this outside Docker.
+    # Uncomment for troubleshooting if desired.
+    #ports:
+    #  - "8787:8787"
+
 
 volumes:
   9router-data:
