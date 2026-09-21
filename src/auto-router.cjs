@@ -13,6 +13,7 @@ const TASK_ACTION_TERMS = [
 ];
 const STRONG_TASK_PHRASES = Object.freeze([
   { reason: "audit", terms: ["fully audit", "deep review"] },
+  { reason: "architecture", terms: ["design the architecture", "design architecture"] },
   { reason: "review", terms: ["review"] },
   { reason: "trace", terms: ["trace"] },
   { reason: "concurrency", terms: ["race condition", "concurrency", "stale-write", "stale write"] },
@@ -31,7 +32,7 @@ const WEAK_DOMAIN_TERMS = Object.freeze([
 const STRONG_TERMS = new Set(STRONG_TASK_PHRASES.flatMap((group) => group.terms));
 const WEAK_TERMS = new Set([...GATED_STRUCTURAL_TERMS, ...WEAK_DOMAIN_TERMS].flatMap((group) => group.terms));
 const HARD_TERMS = [...STRONG_TERMS, ...WEAK_TERMS];
-const PUNCTUATED_PHRASES = new Set(HARD_TERMS.filter((term) => /\s/u.test(term)).map((term) => term.toLocaleLowerCase()));
+const PUNCTUATED_PHRASES = new Set(HARD_TERMS.map((term) => term.toLocaleLowerCase().split(/[^\p{L}\p{N}\p{M}]+/u).filter(Boolean)).filter((parts) => parts.length > 1).map((parts) => parts.join(" ")));
 const STRONG_WEIGHT = 6;
 // Gated structural work ("plan a database migration") carries full weight once task
 // language is present; a lone security/architecture noun stays sub-threshold.
@@ -306,8 +307,8 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   try {
     const { target, classification, config } = selectRoute(body, comboName, { comboStrategies, globalStrategy });
     if (targetExists && !await targetExists(target)) throw new Error(`${classification.level === "easy" ? "Easy" : "Hard"} target "${target}" does not exist.`);
-    log.info("AUTO-ROUTER", `${comboName} → ${target} level=${classification.level} score=${classification.score} reasons=${classification.reasons.join(",")}`);
-    if (config.verbose) log.info("AUTO-ROUTER", `metadata=${JSON.stringify(classification.metadata)}`);
+    log.info("AUTO-ROUTER", `combo=${comboName} level=${classification.level} target=${target} score=${classification.score} reasons=${classification.reasons.join(",") || "none"}`);
+    if (config.verbose) log.info("AUTO-ROUTER", `combo=${comboName} metadata=${JSON.stringify(classification.metadata)}`);
     return await delegate(body, target);
   } catch (error) {
     log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`);

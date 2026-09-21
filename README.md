@@ -117,7 +117,7 @@ Malformed requests, empty requests, and classifier exceptions fail closed to `ha
 Example:
 
 ```
-AUTO-ROUTER coder-auto → coder-high level=hard score=7 reasons=tools-present,audit,concurrency
+AUTO-ROUTER combo=coder-auto level=hard target=coder-high score=7 reasons=tools-present,audit,concurrency
 ```
 
 ## Deploy the published image
@@ -173,20 +173,22 @@ volumes:
 
 ### Update and rollback
 
-Pull and restart to update to the latest validated release:
+`latest` is the automatically maintained validated tracking release. The scheduled compatibility check may move it when a new upstream 9Router image passes this project's complete compatibility and validation suite.
 
 ```sh
 docker compose pull
 docker compose up -d
 ```
 
-Every release has an unambiguous immutable tag: `sha-<full-40-character-auto-router-commit>`. Convenient short aliases (`sha-<12-character-commit>`) and upstream-version variants are also published. Each immutable tag is refused if it already identifies a different source revision or upstream digest. Pin one to roll back:
+For production or reproducible deployments, pin the canonical immutable source identity: the full Git commit SHA tag.
 
 ```yaml
 services:
   9router:
-    image: ghcr.io/skulldorom/9router-auto-router:sha-<auto-router-commit>
+    image: ghcr.io/skulldorom/9router-auto-router:sha-<full-40-character-auto-router-commit>
 ```
+
+`sha-<12-character-commit>` is a convenient short alias, not the canonical identity. Upstream-version variants are also published. Existing full and short SHA aliases are refused if they already identify a different source revision or upstream digest.
 
 The GitHub Actions release workflow validates the exact `decolua/9router@sha256:...` base before building. It resolves `latest` once per publish attempt and passes that immutable digest through compatibility checking, Docker build, metadata, and validation before it authenticates and updates `latest`. CI intentionally resolves the current upstream image independently. Validation includes static checks, all tests, smoke/runtime/persistence checks, and a production HTTP-path test. A six-hour scheduled check rebuilds only if this source commit or the upstream digest changed; failed validation leaves the prior known-good `latest` untouched.
 

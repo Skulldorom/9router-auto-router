@@ -1,15 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import router from "../src/auto-router.cjs";
 
 const { classifyTaskComplexity, selectRoute, routeAutoCombo } = router;
 const message = (content) => ({ model: "coder-auto", messages: [{ role: "user", content }] });
+const classifierCorpus = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures/classifier-corpus.json"), "utf8"));
 const openHandsTools = ["terminal", "file_editor", "browser", "task_tracker", "canvas_ui_control", "search", "git", "python", "node", "docker", "planner", "workspace"].map((name) => ({ type: "function", function: { name, description: `Sanitized ${name} tool`, parameters: { type: "object", properties: {} } } }));
 const harness = (request) => ({ model: "coder-auto", stream: true, tools: openHandsTools, messages: [
   { role: "system", content: "You are a software engineering agent. Inspect the repository, preserve request bodies and tools, and make focused changes.".repeat(12) },
   { role: "system", content: "Workspace: /workspace/project. Follow project instructions. Do not expose credentials. Use repository tests." },
   { role: "user", content: request },
 ] });
+
+test("classifier corpus preserves routing policy boundaries", () => {
+  for (const { prompt, level } of classifierCorpus) {
+    const result = classifyTaskComplexity(message(prompt));
+    assert.equal(result.level, level, prompt);
+    assert.equal(selectRoute(message(prompt), "coder-auto").target, level === "easy" ? "coder" : "coder-high", prompt);
+  }
+});
+
 
 test("short simple prompt and small single-file edit are easy", () => {
   assert.equal(classifyTaskComplexity(message("What is a JavaScript closure?")).level, "easy");
@@ -162,6 +174,23 @@ test("auto chooses one route, preserves original body/tools/stream, and delegate
   const body = { ...harness("small change"), stream: true }, calls = [];
   const response = await routeAutoCombo({ body, comboName: "coder-auto", comboStrategies: { coder: { fallbackStrategy: "fallback" }, "coder-high": { fallbackStrategy: "round-robin" } }, log: { info() {}, warn() {} }, delegate: (sent, target) => { calls.push({ sent, target }); return new Response(target === "coder" ? "nested fallback retained" : "unexpected"); } });
   assert.equal(response.status, 200); assert.equal(calls.length, 1); assert.equal(calls[0].target, "coder"); assert.equal(calls[0].sent, body); assert.equal(calls[0].sent.stream, true); assert.equal(calls[0].sent.tools, body.tools); assert.equal(await response.text(), "nested fallback retained");
+});
+
+test("verbose routing logs structured decisions without request text", async () => {
+  const prompt = "private prompt sentinel must never be logged";
+  const entries = [];
+  const log = { info: (...args) => entries.push(args.join(" ")), warn: (...args) => entries.push(args.join(" ")) };
+  const response = await routeAutoCombo({
+    body: message(prompt),
+    comboName: "coder-auto",
+    comboStrategies: { "coder-auto": { autoRouter: { easyTarget: "coder", hardTarget: "coder-high", verbose: true } } },
+    log,
+    delegate: () => new Response("ok"),
+  });
+  assert.equal(response.status, 200);
+  assert.ok(entries.some((entry) => /combo=coder-auto level=easy target=coder score=\d+ reasons=/.test(entry)));
+  assert.ok(entries.some((entry) => /combo=coder-auto metadata=/.test(entry)));
+  assert.ok(entries.every((entry) => !entry.includes(prompt)));
 });
 
 test("per-combo persisted configuration overrides legacy environment and defaults", () => {

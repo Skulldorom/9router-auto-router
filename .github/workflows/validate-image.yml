@@ -35,8 +35,8 @@ jobs:
       upstream_digest: ${{ steps.metadata.outputs.upstream_digest }}
       upstream_version: ${{ steps.metadata.outputs.upstream_version }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Validate immutable upstream digest and local image tag
@@ -86,7 +86,7 @@ jobs:
         if: inputs.upload_image
         run: docker save "${{ inputs.image_tag }}" | gzip > validated-image.tar.gz
       - if: inputs.upload_image
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: validated-image
           path: validated-image.tar.gz

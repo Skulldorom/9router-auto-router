@@ -3,13 +3,24 @@ set -eu
 
 IMAGE="${1:-9router-auto-router:runtime}"
 NAME="9router-auto-router-runtime-$$"
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$ROOT/scripts/lib-container-test.sh"
 
 cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
-docker run -d --name "$NAME" --tmpfs /app/data:uid=1000,gid=1000 -e NODE_ENV=production -p 127.0.0.1::20128 "$IMAGE" >/dev/null
+RUNTIME_USER=$(container_runtime_user "$IMAGE") || {
+  echo "Runtime test failed: could not determine the runtime UID/GID for ${IMAGE}." >&2
+  exit 1
+}
+case "$RUNTIME_USER" in
+  *:*) RUNTIME_UID=${RUNTIME_USER%%:*}; RUNTIME_GID=${RUNTIME_USER#*:} ;;
+  *) echo "Runtime test failed: invalid runtime UID/GID for ${IMAGE}." >&2; exit 1 ;;
+esac
+
+docker run -d --name "$NAME" --tmpfs "/app/data:uid=${RUNTIME_UID},gid=${RUNTIME_GID}" -e NODE_ENV=production -p 127.0.0.1::20128 "$IMAGE" >/dev/null
 port=$(docker port "$NAME" 20128/tcp | sed 's/.*://')
 
 attempt=0
