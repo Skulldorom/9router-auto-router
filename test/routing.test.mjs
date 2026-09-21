@@ -86,3 +86,35 @@ test("patcher fails closed for ambiguous UI strategy anchors", () => {
   const result = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
   assert.notEqual(result.status, 0); assert.match(result.stderr, /UI strategy anchor is not unique|semantic anchor is not unique/);
 });
+
+test("patcher fails closed when a fusion dispatch or required binding changes", () => {
+  for (const mutate of [
+    (source) => source.replace('if("fusion"===f)', 'if("fallback"===f)'),
+    (source) => source.replace('e=k.comboStrategies||{}', 'e=k.strategies||{}'),
+  ]) {
+    const dir = fixture();
+    const target = path.join(dir, ".next/server/chunks/dynamic-handler.js");
+    fs.writeFileSync(target, mutate(fs.readFileSync(target, "utf8")));
+    const result = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /fusion dispatch anchors|data-flow validation/);
+  }
+});
+
+test("patcher fails closed when UI candidates disappear", () => {
+  const dir = fixture();
+  fs.rmSync(path.join(dir, ".next/static/chunks/app/dashboard/combos/page-hash.js"));
+  const result = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Combo UI strategy asset candidates:\n  1/);
+});
+
+test("patcher check rejects inconsistent partially patched assets", () => {
+  const dir = fixture();
+  assert.equal(spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" }).status, 0);
+  const runtimeTarget = path.join(dir, ".next/server/chunks/dynamic-handler.js");
+  fs.writeFileSync(runtimeTarget, fs.readFileSync(runtimeTarget, "utf8").replace("routeAutoCombo", "delegatedRoute"));
+  const result = spawnSync(process.execPath, [patcher, dir, "--check"], { encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Patched runtime handler integrity failed/);
+});

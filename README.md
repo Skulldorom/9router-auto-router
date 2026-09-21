@@ -198,23 +198,35 @@ Dependabot checks the only ordinary dependency ecosystems in this overlay: `npm`
 
 ## Development and advanced local builds
 
-Local builds are for development, upstream compatibility work, or testing a candidate image. Use the immutable upstream digest that passed compatibility checks; do not treat a mutable `latest` tag as reproducible.
+This project patches compiled Next.js assets. Upstream releases can require an overlay update; compatibility checks intentionally fail closed when semantic anchors, candidates, dispatches, UI structure, bindings, or patch integrity differ. The scheduled upstream validation detects incompatible releases before they replace the last-known-good production image. Do not make the patcher guess at a new compiled structure: review the upstream change, then update its guarded discovery and regression tests.
+
+### Convenience/local build
+
+```sh
+docker build -t 9router-auto-router .
+```
+
+This intentionally uses the Dockerfile default, `decolua/9router:latest`. It is convenient for local work but is not reproducible over time.
+
+### Reproducible build
+
+Use an immutable upstream digest that passed compatibility checks. Production GitHub Actions already resolves, validates, and builds from this immutable-digest form.
 
 ```sh
 npm run check && npm test
 UPSTREAM_IMAGE=decolua/9router@sha256:<digest> ./scripts/check-upstream-compatibility.sh
 docker build \
-  --build-arg UPSTREAM_IMAGE=decolua/9router@sha256:<digest> \
+  --build-arg UPSTREAM_IMAGE="decolua/9router@sha256:<digest>" \
   --build-arg AUTO_ROUTER_REVISION="$(git rev-parse HEAD)" \
   --build-arg UPSTREAM_DIGEST=sha256:<digest> \
   --build-arg UPSTREAM_VERSION=<version> \
-  --tag 9router-auto-router:local .
-./scripts/smoke-test.sh 9router-auto-router:local
-./scripts/runtime-test.sh 9router-auto-router:local
+  -t 9router-auto-router .
+./scripts/smoke-test.sh 9router-auto-router
+./scripts/runtime-test.sh 9router-auto-router
 ```
 
-Compatibility errors report the image, candidate count/files, expected semantic anchors, and failure reason without dumping minified source. Do not force an incompatible build; update the guarded discovery and tests after reviewing upstream changes.
+Compatibility errors report the image, candidate count/files, expected semantic anchors, and failure reason without dumping minified source.
 
-The compiled-runtime patcher discovers assets by semantic anchors and data-flow characteristics rather than fixed minified names where practical, but a few bindings must remain structurally strict. When discovery cannot match exactly one candidate, or cannot prove the required surrounding bindings, it fails closed rather than patching an uncertain location. The runtime resolver alias is read from its own call site and captured before any later inner rebinding, so harmless minifier renaming is handled; the dispatch delegate is likewise reconstructed from the discovered `handleSingleModel` call. UI candidate shape, the strategy selector anchor, and the exact persisted-binding positions are still matched by data flow, so an ambiguous or restructured asset stops the build instead of patching wrongly.
+The compiled-runtime patcher discovers assets by semantic anchors and data-flow characteristics rather than fixed minified names where practical, but a few bindings must remain structurally strict. The runtime resolver alias is read from its own call site and captured before any later inner rebinding, so harmless minifier renaming is handled; the dispatch delegate is likewise reconstructed from the discovered `handleSingleModel` call. UI candidate shape, the strategy selector anchor, and the exact persisted-binding positions are still matched by data flow.
 
 No runtime dependencies are added. `package.json` version `0.1.0` is private-package metadata, not a production release identity; production images rely on immutable source/upstream tags and labels. Tests cover deterministic classification, realistic sanitized OpenHands fixtures, history reclassification, bounded keyword scoring, weak-domain false-positive regressions, modality weighting, one-route/no-fan-out selection, body/tools/stream preservation, ordinary-target delegation, explicit self/auto/stale target rejection, defense-in-depth recursion protection, per-field precedence, server/client UI semantic fixtures, labels, empty-self target filtering, semantic discovery, zero/multiple/ambiguous candidate failures, idempotence, compatibility checks, Docker build, smoke tests, runtime responses, authenticated `/api/settings` persistence across a restart, and a patched-container HTTP-path test. The HTTP test boots the patched container with a deterministic local OpenAI-compatible mock provider, sends easy and hard OpenAI-compatible requests through the normal `/api/v1/chat/completions` path, and proves the patched auto strategy selects exactly one normal target combo, preserves body/stream/tools into delegation, executes the selected combo through normal 9Router handling, and fails closed with a controlled error for missing targets, self-targets, and Auto Router → Auto Router targets.

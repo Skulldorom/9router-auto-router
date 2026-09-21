@@ -22,6 +22,18 @@ test("classifier corpus preserves routing policy boundaries", () => {
   }
 });
 
+test("classifier corpus covers realistic long conversations and tool results", () => {
+  const longConversation = message("continue the implementation");
+  for (let index = 0; index < 16; index += 1) longConversation.messages.unshift({ role: index % 2 ? "assistant" : "user", content: index === 0 ? "context ".repeat(4000) : `turn ${index}` });
+  assert.equal(classifyTaskComplexity(longConversation).level, "hard");
+
+  const substantialToolHistory = message("continue");
+  for (let index = 0; index < 4; index += 1) {
+    substantialToolHistory.messages.unshift({ role: "tool", content: `tool result ${"x".repeat(3500)}` });
+    substantialToolHistory.messages.unshift({ role: "assistant", tool_calls: [{ id: `call_${index}` }] });
+  }
+  assert.equal(classifyTaskComplexity(substantialToolHistory).level, "hard");
+});
 
 test("short simple prompt and small single-file edit are easy", () => {
   assert.equal(classifyTaskComplexity(message("What is a JavaScript closure?")).level, "easy");
@@ -169,6 +181,32 @@ test("indirect recursion is blocked per request", async () => {
   const body = message("hello"), log = { info() {}, warn() {} };
   const response = await routeAutoCombo({ body, comboName: "coder-auto", comboStrategies: {}, log, delegate: () => routeAutoCombo({ body, comboName: "coder-auto", comboStrategies: {}, log, delegate: () => new Response("unexpected") }) });
   assert.equal(response.status, 400); assert.match((await response.json()).error.message, /recursion blocked/);
+});
+test("Auto Router validation failures remain controlled responses", async () => {
+  const response = await routeAutoCombo({
+    body: message("hello"),
+    comboName: "coder-auto",
+    comboStrategies: { "coder-auto": { autoRouter: { easyTarget: "coder-auto", hardTarget: "coder-high" } } },
+    log: { info() {}, warn() {} },
+    delegate: () => new Response("unexpected"),
+  });
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).error.message, /^AUTO-ROUTER: recursion blocked/);
+});
+test("delegated failures preserve their errors and release recursion state", async () => {
+  for (const delegate of [
+    () => { throw new Error("upstream synchronous failure"); },
+    async () => { throw new Error("upstream asynchronous failure"); },
+  ]) {
+    const body = message("hello"), log = { info() {}, warn() {} };
+    await assert.rejects(
+      routeAutoCombo({ body, comboName: "coder-auto", comboStrategies: {}, log, delegate }),
+      /upstream (?:synchronous|asynchronous) failure/,
+    );
+    const response = await routeAutoCombo({ body, comboName: "coder-auto", comboStrategies: {}, log, delegate: () => new Response("retry succeeded") });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "retry succeeded");
+  }
 });
 test("auto chooses one route, preserves original body/tools/stream, and delegates nested combos", async () => {
   const body = { ...harness("small change"), stream: true }, calls = [];

@@ -12,7 +12,7 @@ const TASK_ACTION_TERMS = [
   "rewrite", "overhaul", "plan", "implement", "survey",
 ];
 const STRONG_TASK_PHRASES = Object.freeze([
-  { reason: "audit", terms: ["fully audit", "deep review"] },
+  { reason: "audit", terms: ["fully audit", "deep review", "deep repository audit"] },
   { reason: "architecture", terms: ["design the architecture", "design architecture"] },
   { reason: "review", terms: ["review"] },
   { reason: "trace", terms: ["trace"] },
@@ -305,14 +305,18 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   if (body && typeof body === "object") activeAutoCombos.set(body, nextActive);
   nextActive.add(comboName);
   try {
-    const { target, classification, config } = selectRoute(body, comboName, { comboStrategies, globalStrategy });
-    if (targetExists && !await targetExists(target)) throw new Error(`${classification.level === "easy" ? "Easy" : "Hard"} target "${target}" does not exist.`);
+    let route;
+    try {
+      route = selectRoute(body, comboName, { comboStrategies, globalStrategy });
+      if (targetExists && !await targetExists(route.target)) throw new Error(`${route.classification.level === "easy" ? "Easy" : "Hard"} target "${route.target}" does not exist.`);
+    } catch (error) {
+      log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`);
+      return errorResponse(error.message);
+    }
+    const { target, classification, config } = route;
     log.info("AUTO-ROUTER", `combo=${comboName} level=${classification.level} target=${target} score=${classification.score} reasons=${classification.reasons.join(",") || "none"}`);
     if (config.verbose) log.info("AUTO-ROUTER", `combo=${comboName} metadata=${JSON.stringify(classification.metadata)}`);
     return await delegate(body, target);
-  } catch (error) {
-    log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`);
-    return errorResponse(error.message);
   } finally {
     nextActive.delete(comboName);
     if (nextActive.size === 0 && body && typeof body === "object") activeAutoCombos.delete(body);
