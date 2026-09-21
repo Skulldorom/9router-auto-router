@@ -179,6 +179,14 @@ volumes:
 
 `HEADROOM_URL: http://headroom:8787` is retained exactly. The Auto Router overlay does not need any Headroom-specific configuration.
 
+### Roll back to stock 9Router
+
+Change the image back to `decolua/9router:latest` and keep the existing `/app/data` volume. The overlay does not migrate or replace the `combos` schema; Auto Router configuration stays in normal per-combo strategy settings.
+
+A browser can retain the patched Next.js bundle after the container image changes. If the Combos page still shows the former frontend exception after rollback, hard refresh, clear cached site assets, or open a clean/private browser context before treating the persistent volume as damaged. Do not delete `/app/data` merely to clear a stale browser bundle.
+
+With the validated upstream image, a persisted `fallbackStrategy: "auto"` is handled as normal fallback delegation to that combo's model. The rollback integration test confirms this observed behavior, then changes the combo back to `fallback` through the stock API while preserving its models and unrelated settings.
+
 ### Update and rollback
 
 `latest` is the automatically maintained validated tracking release. The scheduled compatibility check may move it when a new upstream 9Router image passes this project's complete compatibility and validation suite.
@@ -199,6 +207,7 @@ services:
 `sha-<12-character-commit>` is a convenient short alias, not the canonical identity. Upstream-version variants are also published. Existing full and short SHA aliases are refused if they already identify a different source revision or upstream digest.
 
 The GitHub Actions release workflow validates the exact `decolua/9router@sha256:...` base before building. It resolves `latest` once per publish attempt and passes that immutable digest through compatibility checking, Docker build, metadata, and validation. Before registry authentication or tagging, it observes upstream `latest` again and requires both the validated source revision and validated upstream digest to remain current. If upstream moved, it skips publication instead of rebuilding or publishing the stale artifact; the next scheduled or manual run validates the new digest from the beginning. CI intentionally resolves the current upstream image independently. Validation includes static checks, all tests, smoke/runtime/persistence checks, and a production HTTP-path test. A six-hour scheduled check rebuilds only if this source commit or the upstream digest changed; failed validation leaves the prior known-good `latest` untouched.
+
 
 ## Dependabot
 
