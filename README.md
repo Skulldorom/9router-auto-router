@@ -402,6 +402,8 @@ docker build \
 
 The test suite covers deterministic classification, false-positive regressions, routing, target validation, configuration precedence, UI integration, semantic/structural upstream discovery, persistence, runtime behavior, and the patched-container HTTP request path.
 
+`./scripts/auto-router-pipeline-parity-test.sh 9router-auto-router:local` sends one realistic 62-message, 83-tool OpenHands-style payload directly to `coder-high` and through `coder-auto` configured to select `coder-high`. Deterministic local Headroom and provider services capture both paths and require byte-identical target-provider bodies, Headroom input/output, RTK output, message/tool sizes, stream behavior, fallback/sticky combo handling, and format conversion. The direct `POST coder-high → provider` versus delegated `POST provider → provider` label is request logging identity; the captured target pipeline is identical.
+
 Compatibility failures report the relevant image, candidate information, expected semantic structures, and failure reason without dumping minified source.
 
 ## Dependabot
