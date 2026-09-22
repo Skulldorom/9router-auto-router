@@ -158,7 +158,7 @@ test("Auto Router is a strategy option and upstream strategies are preserved", (
     assert.match(options, /label:"Round Robin — rotate"/);
     assert.match(options, /label:"Fusion — panel \+ judge"/);
     assert.match(options, /label:"Auto Router"/);
-    assert.equal((patched.match(/label:"Auto Router"/g) || []).length, 1);
+    assert.equal((patched.match(/label:"Auto Router"/g) || []).length, 2);
   }
 });
 
@@ -169,7 +169,8 @@ test("Auto Router controls live in the Edit Combo modal and are gated on the str
     const patched = fs.readFileSync(file, "utf8");
     const modal = modalSection(patched);
     assert.match(modal, /Strategy/);
-    assert.match(modal, /value:_arStrategy,onChange:event=>_arSetStrategy\(event\.target\.value\)/);
+    assert.match(modal, /const _arStrategyOptions=\[.*?value:"auto",label:"Auto Router"\}\],_arInitialConfig=/);
+    assert.match(modal, /options:_arStrategyOptions,value:_arStrategy,onChange:event=>_arSetStrategy\(event\.target\.value\)/);
     assert.match(modal, /"auto"===_arStrategy&&/);
     for (const label of ["Auto Router Settings", "Easy target", "Hard target", "Advanced", "Hard threshold", "Long context threshold", "Large tool-result threshold", "Many-tools threshold", "Verbose logging"]) assert.ok(modal.includes(label), `modal missing ${label}`);
     assert.match(modal, /"auto"!==_arStrategy|"auto"===_arStrategy/);
@@ -256,11 +257,11 @@ test("Save failure surfaces an error and never reports success or closes the mod
   assert.equal(patch(dir).status, 0);
   for (const file of uiFiles(dir)) {
     const patched = fs.readFileSync(file, "utf8");
-    assert.match(patched, /let saved=await [a-z]+\([a-z]+\.id,comboData\);if\(!saved\)return;/);
+    assert.match(patched, /let saved=await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\.id,comboData\);if\(!saved\)return;/);
     assert.match(patched, /if\(!persisted\.ok\)\{let error=await persisted\.json\(\)\.catch\(\(\)=>\(\{\}\)\);alert\(error\.error\|\|"Failed to save combo strategy"\);return\}/);
     // Close only happens after a successful PATCH.
     const successClose = patched.indexOf("await ${plan.refresh}()");
-    assert.match(patched, /if\(!persisted\.ok\)[\s\S]*?return\}await [a-z]+\(\),[a-z]+\(null\)/);
+    assert.match(patched, /if\(!persisted\.ok\)[\s\S]*?return\}await [A-Za-z_$][\w$]*\(\),[A-Za-z_$][\w$]*\(null\)/);
     assert.equal(successClose, -1);
   }
 });
@@ -271,7 +272,7 @@ test("Modal draft state initializes from comboStrategies without issuing a PATCH
   for (const file of uiFiles(dir)) {
     const patched = fs.readFileSync(file, "utf8");
     const modal = modalSection(patched);
-    assert.match(modal, /const _arInitialConfig=_arInitialStrategy\.autoRouter&&typeof _arInitialStrategy\.autoRouter==="object"\?_arInitialStrategy\.autoRouter:\{\}/);
+    assert.match(modal, /const _arStrategyOptions=\[.*?value:"auto",label:"Auto Router"\}\],_arInitialConfig=_arInitialStrategy\.autoRouter&&typeof _arInitialStrategy\.autoRouter==="object"\?_arInitialStrategy\.autoRouter:\{\}/);
     assert.match(modal, /\[_arStrategy,_arSetStrategy\]=\(0,[a-z]\.useState\)\(_arInitialStrategy\.fallbackStrategy\|\|"fallback"\)/);
     assert.match(modal, /\[_arConfig,_arSetConfig\]=\(0,[a-z]\.useState\)\(_arInitialConfig\)/);
     assert.match(modal, /_arUpdate=\(key,value\)=>_arSetConfig\(config=>\(\{\.\.\.config,\[key\]:value\}\)\)/);
@@ -289,8 +290,8 @@ test("Modal keeps upstream name validation and duplicate-submission protection",
   for (const file of uiFiles(dir)) {
     const patched = fs.readFileSync(file, "utf8");
     const modal = modalSection(patched);
-    assert.match(modal, /const _arInitialConfig=/);
-    assert.match(modal, /,[a-z]=async\(\)=>\{if\(![a-z]\([a-z]\)\)return;[a-z]\(!0\);try\{await [a-z]\(\{name:[a-z]\.trim\(\),models:[a-z]\}/);
+    assert.match(modal, /const _arStrategyOptions=\[.*?value:"auto",label:"Auto Router"\}\],_arInitialConfig=/);
+    assert.match(modal, /,[A-Za-z_$][\w$]*=async\(\)=>\{if\(![A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\)return;[A-Za-z_$][\w$]*\(!0\);try\{await [A-Za-z_$][\w$]*\(\{name:[A-Za-z_$][\w$]*\.trim\(\),models:[A-Za-z_$][\w$]*\}/);
   }
 });
 
@@ -412,11 +413,13 @@ test("patcher check validates unpatched structure and rejects partially patched 
   assert.match(result.stderr, /Patched runtime handler integrity failed/);
 });
 
-test("patcher rejects assets whose card already carries Auto Router controls", () => {
-  const server = serverUi.replace('return(0,w.jsxs)(bA.Zp,{padding:"sm",children:[', 'return(0,w.jsxs)(bA.Zp,{padding:"sm",children:["Easy target",');
-  const result = patch(fixture({ server }));
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /leaked into the combo card/);
+test("patcher rejects assets whose card carries any Auto Router control marker", () => {
+  for (const marker of ["Auto Router Settings", "Easy target", "Hard target", "Advanced"]) {
+    const server = serverUi.replace('return(0,w.jsxs)(bA.Zp,{padding:"sm",children:[', `return(0,w.jsxs)(bA.Zp,{padding:"sm",children:["${marker}",`);
+    const result = patch(fixture({ server }));
+    assert.notEqual(result.status, 0, marker);
+    assert.match(result.stderr, /leaked into the combo card/);
+  }
 });
 
 test("patcher fails closed when UI candidates disappear", () => {

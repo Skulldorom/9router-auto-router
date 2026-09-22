@@ -63,8 +63,11 @@ test("derived image verification precedes every image integration test", () => {
   assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http && http < rollback);
   assert.match(validate, /verify-built-image\.sh "\$\{\{ inputs\.image_tag \}\}" "\$REVISION" "\$UPSTREAM_DIGEST"/);
   const verifier = fs.readFileSync(path.join(root, "scripts/verify-built-image.sh"), "utf8");
-  for (const required of ["auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v3", "Easy target", "Hard target", "org.opencontainers.image.revision", "upstream.digest", "availableCombos:"]) assert.ok(verifier.includes(required));
-  for (const cardinality of ['label:\\"Auto Router\\"', "9router-auto-router-ui:v3", "Easy target", "Hard target"]) assert.ok(verifier.includes(`grep -o "${cardinality}" "$file" | wc -l`));
+  for (const required of ["auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v4", "Easy target", "Hard target", "Advanced", "org.opencontainers.image.revision", "upstream.digest", "availableCombos:"]) assert.ok(verifier.includes(required));
+  assert.ok(verifier.includes('grep -o "label:\\"Auto Router\\\"" "$file" | wc -l)" -eq 2'));
+  assert.ok(verifier.includes('grep -o "9router-auto-router-ui:v4" "$file" | wc -l'));
+  for (const modalControl of ["Easy target", "Hard target", "Advanced"]) assert.ok(verifier.includes(`grep -q "${modalControl}" "$file"`));
+  assert.match(verifier, /node \/opt\/9router-auto-router\/apply-patch\.mjs \/app --check/);
   assert.doesNotMatch(verifier, /page-hash|app\/dashboard\/combos\/page/);
 });
 
@@ -79,8 +82,13 @@ test("rollback browser regression attaches stdin, verifies execution markers, an
   assert.match(rollback, /page\.waitForResponse\(response => response\.url\(\)\.includes\("\/api\/settings"\) && response\.request\(\)\.method\(\) === "PATCH" && response\.ok\(\)\)/);
   assert.match(rollback, /page\.waitForFunction\(async \(\) =>/);
   assert.doesNotMatch(rollback, /waitForTimeout\(250\)/);
+  assert.match(rollback, /locator\("xpath=ancestor::\*\[\.\/\/button\[@title=\\"Edit\\"\]\]\[1\]"\)\.locator\("button\[title=\\"Edit\\"\]"\)\.click\(\)/);
+  assert.match(rollback, /const strategy = page\.locator\("select"\)\.first\(\);\n    await strategy\.selectOption\("auto"\)/);
   assert.match(rollback, /getByLabel\("Easy target"\)\.selectOption\("coder"\)/);
   assert.match(rollback, /getByLabel\("Hard target"\)\.selectOption\("coder-high"\)/);
+  assert.match(rollback, /leaked Easy target onto the combo card/);
+  assert.match(rollback, /getByRole\("button", \{ name: "Save", exact: true \}\)\.click\(\)/);
+  assert.match(rollback, /getByRole\("button", \{ name: "Cancel", exact: true \}\)\.click\(\)/);
   assert.match(rollback, /browser_combos patched-before-auto true/);
 });
 

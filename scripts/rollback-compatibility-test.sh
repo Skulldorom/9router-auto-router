@@ -91,28 +91,47 @@ const phase = process.env.PHASE;
   }
   assertNoErrors();
   if (process.env.CONFIGURE === "true") {
+    let settingsPatches = 0;
+    page.on("request", request => {
+      if (request.url().includes("/api/settings") && request.method() === "PATCH") settingsPatches += 1;
+    });
     const settingsPatch = () => page.waitForResponse(response => response.url().includes("/api/settings") && response.request().method() === "PATCH" && response.ok());
-    const autoCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//select][1]");
-    let save = settingsPatch();
-    await autoCard.locator("select").first().selectOption("auto");
-    await save;
-    save = settingsPatch();
+    const autoCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]");
+    if (await autoCard.getByText("Easy target", { exact: true }).count()) throw new Error(`${phase} leaked Easy target onto the combo card`);
+    if (await autoCard.getByText("Hard target", { exact: true }).count()) throw new Error(`${phase} leaked Hard target onto the combo card`);
+    if (await autoCard.getByText("Advanced", { exact: true }).count()) throw new Error(`${phase} leaked Advanced controls onto the combo card`);
+    await autoCard.locator("button[title=\"Edit\"]").click();
+    const strategy = page.locator("select").first();
+    await strategy.selectOption("auto");
+    if (await page.getByLabel("Easy target").count() !== 1 || await page.getByLabel("Hard target").count() !== 1 || await page.getByText("Advanced", { exact: true }).count() !== 1) throw new Error(`${phase} did not show Auto Router modal controls`);
     await page.getByLabel("Easy target").selectOption("coder");
-    await save;
-    save = settingsPatch();
     await page.getByLabel("Hard target").selectOption("coder-high");
+    if (settingsPatches !== 0) throw new Error(`${phase} persisted modal edits before Save`);
+    const save = settingsPatch();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
     await save;
+    if (settingsPatches !== 1) throw new Error(`${phase} expected one settings PATCH after Save, got ${settingsPatches}`);
     await page.waitForFunction(async () => {
       const response = await fetch("/api/settings");
       if (!response.ok) return false;
-      const strategy = (await response.json()).comboStrategies?.["coder-auto"];
-      return strategy?.fallbackStrategy === "auto" && strategy.autoRouter?.easyTarget === "coder" && strategy.autoRouter?.hardTarget === "coder-high";
+      const saved = (await response.json()).comboStrategies?.["coder-auto"];
+      return saved?.fallbackStrategy === "auto" && saved.autoRouter?.easyTarget === "coder" && saved.autoRouter?.hardTarget === "coder-high";
     }, { timeout: 10_000 });
+    await page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]").locator("button[title=\"Edit\"]").click();
+    await page.getByLabel("Easy target").selectOption("coder-high");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    if (settingsPatches !== 1) throw new Error(`${phase} persisted modal edits before Save`);
+    await page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]").locator("button[title=\"Edit\"]").click();
+    if (await page.getByLabel("Easy target").inputValue() !== "coder") throw new Error(`${phase} Cancel did not discard the Easy target draft`);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
     assertNoErrors();
     await page.reload({ waitUntil: "networkidle" });
-    if (await autoCard.locator("select").first().inputValue() !== "auto") throw new Error(`${phase} did not persist Auto Router selection`);
+    const reloadedCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]");
+    await reloadedCard.locator("button[title=\"Edit\"]").click();
+    if (await page.locator("select").first().inputValue() !== "auto") throw new Error(`${phase} did not persist Auto Router selection`);
     if (await page.getByLabel("Easy target").inputValue() !== "coder") throw new Error(`${phase} did not persist Easy target`);
     if (await page.getByLabel("Hard target").inputValue() !== "coder-high") throw new Error(`${phase} did not persist Hard target`);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
     assertNoErrors();
   }
   await context.close();

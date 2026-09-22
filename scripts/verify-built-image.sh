@@ -5,7 +5,7 @@ IMAGE=${1:?Usage: verify-built-image.sh IMAGE [REVISION] [UPSTREAM_DIGEST]}
 EXPECTED_REVISION=${2:-${EXPECTED_REVISION:-}}
 EXPECTED_UPSTREAM_DIGEST=${3:-${EXPECTED_UPSTREAM_DIGEST:-}}
 MARKER=9router-auto-router:v3
-UI_MARKER=9router-auto-router-ui:v3
+UI_MARKER=9router-auto-router-ui:v4
 
 fail() {
   echo "Built image verification failed: $*" >&2
@@ -34,13 +34,11 @@ runtime_files=$(grep -RFl "9router-auto-router:v3" /app/.next/server 2>/dev/null
 [ "$(printf "%s\n" "$runtime_files" | sed "/^$/d" | wc -l)" -eq 1 ]
 runtime_file=$(printf "%s\n" "$runtime_files" | sed -n "/./{p;q;}")
 [ "$(grep -o "routeAutoCombo" "$runtime_file" | wc -l)" -eq 2 ]
-ui_files=$(grep -RFl "9router-auto-router-ui:v3" /app/.next 2>/dev/null || true)
+ui_files=$(grep -RFl "9router-auto-router-ui:v4" /app/.next 2>/dev/null || true)
 [ "$(printf "%s\n" "$ui_files" | sed "/^$/d" | wc -l)" -eq 2 ]
 for file in $ui_files; do
-  [ "$(grep -o "9router-auto-router-ui:v3" "$file" | wc -l)" -eq 1 ]
-  [ "$(grep -o "label:\"Auto Router\"" "$file" | wc -l)" -eq 1 ]
-  [ "$(grep -o "Easy target" "$file" | wc -l)" -eq 1 ]
-  [ "$(grep -o "Hard target" "$file" | wc -l)" -eq 1 ]
+  [ "$(grep -o "9router-auto-router-ui:v4" "$file" | wc -l)" -eq 1 ]
+  [ "$(grep -o "label:\"Auto Router\"" "$file" | wc -l)" -eq 2 ]
   [ "$(grep -o "availableCombos:" "$file" | wc -l)" -eq 2 ]
   [ "$(grep -o "availableCombos:[A-Za-z_$][A-Za-z0-9_$]*\.map(" "$file" | wc -l)" -eq 1 ]
   if grep -q "availableCombos:_arComboCollection.map(" "$file"; then
@@ -48,6 +46,10 @@ for file in $ui_files; do
   fi
   ! grep -Eq "availableCombos:[A-Za-z_$][A-Za-z0-9_$]*\.map\([^A-Za-z_$]" "$file"
   [ "$(grep -o "autoRouter" "$file" | wc -l)" -ge 2 ]
+  grep -q "Easy target" "$file"
+  grep -q "Hard target" "$file"
+  grep -q "Advanced" "$file"
 done
+node /opt/9router-auto-router/apply-patch.mjs /app --check
 SH
 echo "Built image verification passed: ${IMAGE} revision=${revision} upstream=${upstream_digest}"
