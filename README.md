@@ -73,14 +73,14 @@ These are normal 9Router combos and can keep their own fallback or Round Robin c
 
 Create another combo, for example `coder-auto`.
 
-In its **Strategy** selector choose **Auto Router**, then select:
+Select **Edit Combo**, choose **Auto Router** in the **Strategy** selector, configure:
 
 ```text
 Easy target: coder
 Hard target: coder-high
 ```
 
-Optionally expand **Advanced** to tune the classifier thresholds, then save the combo.
+Optionally expand **Advanced** to tune the classifier thresholds, then select **Save**. The combo card only displays its selected strategy; Auto Router controls stay in **Edit Combo**.
 
 No `AUTO_ROUTER_*` environment variables are required for normal setup.
 
