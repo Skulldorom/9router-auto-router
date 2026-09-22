@@ -4,13 +4,213 @@
   <a href="https://ko-fi.com/skulldorom"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" /></a>
 </p>
 
-Small Docker overlay for [decolua/9router](https://github.com/decolua/9router). It remains a drop-in 9Router image: Auto Router chooses exactly one normal 9Router combo, then delegates execution back to 9Router.
+Adaptive model routing for [9Router](https://github.com/decolua/9router).
 
-## UI-first setup
+9Router Auto Router adds an **Auto Router** strategy to 9Router that automatically chooses between two existing 9Router combos based on the complexity of each request.
 
-Use `ghcr.io/skulldorom/9router-auto-router:latest` and preserve the existing `/app/data` volume. Open the normal 9Router UI, open **Combos**, create or edit a combo, choose **Auto Router**, select **Easy target** and **Hard target**, optionally expand **Advanced**, and save. The target selectors list existing combos and exclude the combo being edited. No `AUTO_ROUTER_*` variables are required.
+Instead of manually deciding which combo should handle a task:
 
-The normal Compose example contains only the custom image and normal 9Router persistence. Target combos retain their existing fallback or Round Robin behavior.
+```text
+OpenHands / Client
+       │
+       ▼
+   coder-auto
+       │
+       ├── easy ──► coder ─────► Luna High
+       │
+       └── hard ──► coder-high ► Terra High
+```
+
+Auto Router performs a fast, local, deterministic complexity check, selects **one** target combo, and delegates the request back to normal 9Router processing.
+
+Your providers, accounts, quotas, fallback chains, Round Robin configuration, streaming, tools, models, and provider execution remain managed by 9Router.
+
+Auto Router does **not** call another LLM to classify requests, fan requests out to multiple models, or send prompts to an external classification service.
+
+## Getting started
+
+If you already run 9Router with Docker Compose, getting started only requires changing the image.
+
+### 1. Change the image
+
+Update your existing Compose file:
+
+```diff
+services:
+  9router:
+-   image: decolua/9router:latest
++   image: ghcr.io/skulldorom/9router-auto-router:latest
+```
+
+Keep your existing ports, volumes, environment variables, networks, Headroom configuration, and other 9Router settings unchanged.
+
+Then pull and start the new image:
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+Keep your existing `/app/data` volume. Your accounts, settings, combos, and provider configuration remain intact.
+
+### 2. Create your normal combos
+
+In the 9Router UI, create or use the two ordinary combos that Auto Router should choose between.
+
+For example:
+
+```text
+coder
+└── Luna High
+
+coder-high
+└── Terra High
+```
+
+These are normal 9Router combos and can keep their own fallback or Round Robin configuration.
+
+### 3. Create an Auto Router combo
+
+Create another combo, for example `coder-auto`.
+
+In its **Strategy** selector choose **Auto Router**, then select:
+
+```text
+Easy target: coder
+Hard target: coder-high
+```
+
+Optionally expand **Advanced** to tune the classifier thresholds, then save the combo.
+
+No `AUTO_ROUTER_*` environment variables are required for normal setup.
+
+### 4. Use it
+
+Point OpenHands, VS Code, or any other OpenAI-compatible client at 9Router as usual and use the Auto Router combo as the model:
+
+```text
+model: coder-auto
+```
+
+Auto Router now decides whether each request should go to `coder` or `coder-high`. Everything after that decision is normal 9Router routing.
+
+## How it works
+
+Auto Router sits on top of normal 9Router combo handling. It does not replace 9Router's routing system.
+
+```text
+                    ┌─────────────┐
+                    │   Request   │
+                    └──────┬──────┘
+                           │
+                           ▼
+                    ┌─────────────┐
+                    │ Auto Router │
+                    │ Classifier  │
+                    └──────┬──────┘
+                           │
+                    Complexity
+                      decision
+                     /        \
+                    /          \
+                 Easy          Hard
+                  │              │
+                  ▼              ▼
+               coder        coder-high
+                  │              │
+                  └──────┬───────┘
+                         ▼
+               Normal 9Router handling
+```
+
+The classifier chooses exactly **one** target. There is no fan-out, judge model, second LLM request, or comparison between model responses.
+
+Once a target is selected, that combo behaves exactly as it normally would in 9Router. For example, `coder` can itself contain normal fallback routing:
+
+```text
+coder-auto
+    │
+    ├── easy
+    │    └── coder
+    │         ├── Luna High
+    │         └── existing fallback(s)
+    │
+    └── hard
+         └── coder-high
+              ├── Terra High
+              └── existing fallback(s)
+```
+
+Auto Router only decides which existing combo receives the request.
+
+### What makes a request hard?
+
+Classification is local and deterministic.
+
+The classifier considers signals including:
+
+- task-oriented complexity phrases;
+- conversation history;
+- accumulated context size;
+- actual tool calls and tool results;
+- large tool output;
+- multi-file or repository-wide work;
+- debugging, audit, concurrency, root-cause, and similar complex tasks.
+
+Strong phrases such as `fully audit`, `deep review`, `race condition`, `root cause`, `financial precision`, `performance investigation`, `debug intermittent`, `failing tests with unclear cause`, `repository-wide`, and `multi-file` carry meaningful weight.
+
+Generic technical words such as `security`, `authentication`, `permissions`, `architecture`, and `migration` are deliberately weak signals by themselves.
+
+For example, a simple request such as:
+
+```text
+Rename Authentication to Login
+```
+
+should remain easy, while:
+
+```text
+Fully audit the authentication and permissions implementation
+```
+
+provides much stronger evidence for the hard route.
+
+Available tools are also deliberately weak evidence because agents such as OpenHands may expose a large toolset even for trivial tasks. Actual work history and substantial tool output are stronger signals.
+
+### Supported request shapes
+
+Classification reads the current user task from supported request bodies:
+
+- OpenAI Chat Completions `messages`;
+- OpenAI Responses-style `input`;
+- translated Anthropic-style `contents`;
+- nested 9Router request wrappers.
+
+When several representations describe the same logical conversation, one populated canonical representation is inspected rather than double-counting the request.
+
+Semantic scoring focuses on user task content. System prompts, assistant output, tool output, generated code, and metadata cannot independently make a request hard, although structural history and tool-result signals can still contribute to complexity.
+
+Malformed requests, empty recognized requests, and classifier exceptions fail closed to the **hard** target.
+
+### Privacy
+
+Classification happens locally inside the 9Router container.
+
+Auto Router does not:
+
+- call an external classifier;
+- call another LLM to decide the route;
+- fan out to multiple models;
+- persist request text;
+- log prompt text.
+
+Every routing decision can log the combo, level, selected target, bounded score, and reason labels without logging request text. Verbose mode adds structural classification metadata, not prompt content.
+
+## Configuration
+
+Most users should configure Auto Router entirely through the normal 9Router UI.
+
+The persisted per-combo configuration looks like:
 
 ```json
 {
@@ -31,76 +231,37 @@ The normal Compose example contains only the custom image and normal 9Router per
 }
 ```
 
-The existing `/api/settings` and `/app/data` path persists this per-combo structure. Precedence is independently applied to every field: valid `comboStrategies[comboName].autoRouter` value, then a valid matching legacy `AUTO_ROUTER_*` environment value, then the built-in default. Empty targets, non-positive/non-integer thresholds, and non-boolean verbose values are invalid and therefore fall through to the next source. Legacy environment-only deployments continue to work.
+The **Advanced** controls expose the classifier thresholds:
 
-```
-OpenHands
-   │
-   ▼
-coder-auto
-   │
-   ├── easy ──► coder ─────► Luna High
-   │
-   └── hard ──► coder-high ► Terra High
-```
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| Hard threshold | `6` | Score at which a request becomes hard |
+| Long context | `24000` | Character threshold for large context |
+| Large tool result | `12000` | Character threshold for large tool output |
+| Many tools | `16` | Threshold for unusually large toolsets |
+| Verbose | `false` | Log structural routing metadata without request text |
 
-Nested combos retain their upstream behavior, but Auto Router chaining is intentionally not supported:
+Configuration is resolved independently per field in this order:
 
-```
-coder-auto
-    │
-    ├── easy
-    │    └── coder                     (ordinary combo; may use fallback/round-robin)
-    │         ├── Luna High
-    │         └── existing fallback(s)
-    │
-    └── hard
-         └── coder-high                (ordinary combo; may use fallback/round-robin)
-              ├── Terra High
-              └── existing fallback(s)
-```
+1. valid per-combo `comboStrategies[comboName].autoRouter` value;
+2. valid matching legacy `AUTO_ROUTER_*` environment value;
+3. built-in default.
 
-An Auto Router target must be an ordinary (non-`auto`) combo. Auto Router → Auto Router chaining is intentionally unsupported: an easy/hard target that the same Auto Router combo, or one whose `fallbackStrategy` is `auto`, is rejected with a controlled `400` before delegation. A per-request re-entry guard remains as defense-in-depth, but correctness does not depend on request object identity surviving delegation.
+Invalid or missing values fall through to the next source.
 
-`coder`, `coder-high`, providers, accounts, quotas, capability adapters, fallback chains, SSE, request bodies, tools, and streaming remain owned by 9Router. Auto does not fan out, invoke a judge, persist requests, log prompts, call an LLM, or know provider/model names.
+### Target rules
 
-## Current upstream integration
+Easy and Hard targets must be ordinary 9Router combos.
 
-Validated upstream `decolua/9router:0.5.75` / `latest` image digest `sha256:7c893bc2c27ecea2ae337abd5eacfec9e5763091b3a3b7862fc0625b770bb156` during initial integration. The release workflow resolves and validates the current immutable digest before every publish. The production server uses the compiled Next standalone assets; `/app/open-sse/services/combo.js` is not imported by that runtime copy, so changing it would not affect requests.
+Auto Router → Auto Router chaining is intentionally unsupported. The UI excludes the current combo and other Auto Router combos from the target selectors, and the runtime independently rejects self-referencing, missing, or Auto Router targets before delegation.
 
-The overlay dynamically discovers the single runtime handler under `/app/.next/server`, rather than assuming a chunk name. It requires exactly one file containing all of these semantic anchors:
+A resolver result that proves the target is missing produces the Auto Router configuration error. Unexpected resolver exceptions are allowed to propagate through the normal 9Router error path rather than being incorrectly reported as missing targets.
 
-- `comboStrategies`
-- `strategy: fusion`
-- `Combo "`
-- `handleSingleModel`
-- `comboStickyRoundRobinLimit`
-
-It then requires exactly two distinct Fusion dispatches. For each dispatch it parses that dispatch's own object literal, then walks enclosing brace scopes to associate the `body`, models-resolver, `comboStrategies`/settings, and single-model delegation that belong to the same dispatch path before adding guarded `auto` branches. Association is structural, not distance-based: bindings may sit arbitrarily far from the Fusion anchor, and extraneous properties on the dispatch are ignored. Both branches delegate back into the original 9Router handler, so `coder` and `coder-high` run their normal fallback logic. Discovery returns zero or multiple candidates, missing anchors, unexpected or ambiguous bindings, or patch-integrity failures as build failures. The checker and patcher execute the same discovery code.
-
-The current upstream UI has a compact serialized combo strategy list in one server and one client asset. The overlay validates both assets using the `Fallback`, `Round Robin`, and `Fusion` labels, then adds **Auto Router**, per-combo target selectors, and Advanced controls. If that exact structure changes, the build fails closed instead of modifying an uncertain asset. Upstream entrypoint, command, data mounts, user handling, and persistent data are unchanged.
-
-## Configure 9Router
-
-Create ordinary `coder` and `coder-high` combos first. Configure their existing fallback/round-robin chains normally. Create `coder-auto` with a non-empty placeholder model list if required by the upstream combo editor; its placeholder members are never executed once its strategy is `auto`.
-
-Select **Auto Router** in the normal Combo strategy selector. The editor exposes labeled **Easy target** and **Hard target** selectors, plus **Advanced** controls for **Hard threshold**, **Long context threshold (characters)**, **Large tool-result threshold (characters)**, **Many-tools threshold**, and **Verbose logging**. Numeric controls use synchronized editable state: external settings reloads update their displayed values, invalid edits restore the current persisted/default value on blur, and valid values save only on blur. Easy and Hard targets must be ordinary (non-`auto`) combos. The selector excludes the current combo and every other Auto Router combo, while ordinary fallback and Round Robin combos remain selectable. Persisted deleted or now-invalid targets remain visible as a disabled `missing or Auto Router — unsupported target` option; the UI never silently changes them. A target equal to the Auto Router combo itself, or configured with `fallbackStrategy: "auto"`, is still rejected with a controlled `400` before delegation, so stale/manual configurations cannot bypass the rule. Target existence is verified through the upstream resolver at the runtime boundary; this intentionally remains separate from settings strategy inspection because only that resolver can prove a persisted target still exists. A resolver that resolves to `false` means the configured target is genuinely missing and returns the existing Auto Router configuration error. A resolver that throws or rejects is an unexpected upstream/runtime failure: that error propagates through the normal 9Router error path and is never rewritten as a missing target. A per-request re-entry guard remains defense-in-depth and is released on failure, so a resolver failure cannot poison later routing.
+A per-request re-entry guard remains as defense-in-depth.
 
 ### Legacy environment compatibility
 
-Existing deployments may retain `AUTO_ROUTER_*` variables. They are optional compatibility fallbacks, not the normal setup path. Each valid per-combo UI field takes precedence over its matching environment value; missing or invalid UI fields use a valid environment value, otherwise the built-in default listed below.
-
-Point OpenHands at the standard 9Router OpenAI-compatible endpoint with `model = coder-auto`. Classification is stateless and reads the request's supplied Chat `messages`, Responses `input`, or translated `contents`; a later `continue` can therefore use the supplied earlier history.
-
-## Classification
-
-Classification is local and deterministic. Every routing decision logs its combo, level, target, bounded score, and reason labels; request text is never logged. `AUTO_ROUTER_VERBOSE=true` additionally logs structural classification metadata, never request text. Semantic terms use case-insensitive whole tokens and adjacent token phrases, not raw substrings. Ordinary prose punctuation joins phrase words, so `fully-audit`, `fully: audit`, and `race-condition` retain their normal task meaning. Paths, filenames, snake_case, and camelCase identifiers remain atomic: `reviewStatus`, `migrationPlan`, and `migration-plan.json` do not count as task actions. Quoted actions alone do not score, while an unquoted task action can use quoted domain context such as `Investigate "authentication architecture"`.
-
-Available tools are deliberately weak evidence. OpenHands commonly supplies a normal toolset for trivial requests, so a realistic set plus `Rename this variable in src/foo.js` remains **easy → coder**. Tool count alone cannot reach the default hard threshold.
-
-Actual work history is stronger evidence: repeated tool calls/results, substantial tool output, long message history, and large accumulated context add materially more. One image or small attachment adds only a small complexity signal; 9Router's unchanged capability routing remains responsible for vision/file requirements.
-
-Semantic scoring reads current user task content, with weak earlier-user context only; system prompts, assistant output, tool output, generated code, and metadata cannot independently make a request hard. Earlier user semantic evidence is capped at four total points and at one point below any configured hard threshold, so it helps a genuine follow-up without accumulating into a hard route by itself. Supported request bodies are OpenAI Chat Completions `messages`, OpenAI Responses `input` (string or role-tagged item array), and translated Anthropic-style `contents`; nested 9Router request wrappers are handled. When an adapter supplies several representations for the same logical conversation, exactly one populated canonical shape is inspected: `messages`, then `input`, then `contents`; empty placeholders fall through to a populated supported shape, while an all-empty recognized request fails closed. Other shapes are not treated as semantic user input. The validated upstream exposes Chat Completions as the public completion endpoint; Responses `input` and translated `contents` reach Auto Router only at its internal normalized request boundary, so deterministic unit regressions cover those shapes while the container test covers the public HTTP path. Structural history signals still apply. Strong task phrases (`fully audit`, `deep review`, `race condition`, `root cause`, `financial precision`, `performance investigation`, `debug intermittent`, `intermittent failing tests`, `failing tests with unclear cause`, `repository-wide`, `multi-file`) carry substantial weight. Generic domain nouns (`security`, `authentication`, `permissions`, `architecture`, `migration`) are treated as weak, label-prone terms: they only contribute when the same user text also carries a task-oriented action word, so editing a label named `Authentication` or `Permissions`, or renaming `Architecture to System Design`, remains easy, while `fully audit the authentication and permissions implementation` and `plan a database migration` still route hard. Classification is deterministic and never serializes the whole request; it traverses structured `messages`, Responses-style `input`, and Anthropic-style `contents` while tolerating circular values and hostile getters/`toJSON()`.
+Existing deployments can continue using the original environment variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -109,94 +270,31 @@ Semantic scoring reads current user task content, with weak earlier-user context
 | `AUTO_ROUTER_HARD_THRESHOLD` | `6` | Hard score threshold |
 | `AUTO_ROUTER_LONG_CONTEXT_CHARS` | `24000` | Large-context threshold |
 | `AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS` | `12000` | Large tool-output threshold |
-| `AUTO_ROUTER_MANY_TOOLS` | `16` | Large-toolset threshold; contributes at most 1, huge sets at most 2 |
-| `AUTO_ROUTER_VERBOSE` | `false` | Emit numeric metadata, never request text |
+| `AUTO_ROUTER_MANY_TOOLS` | `16` | Large-toolset threshold |
+| `AUTO_ROUTER_VERBOSE` | `false` | Emit structural metadata, never request text |
 
-Malformed requests, empty requests, and classifier exceptions fail closed to `hard`. Legitimate sparse OpenAI-compatible requests do not.
+These variables are compatibility fallbacks, not the recommended setup path. New installations should use the UI.
 
-Example:
+## Updating
 
-```
-AUTO-ROUTER combo=coder-auto level=hard target=coder-high score=7 reasons=tools-present,audit,concurrency
-```
+`latest` tracks the newest upstream 9Router image that has passed this project's compatibility and validation pipeline.
 
-## Deploy the published image
-
-Use the prebuilt GHCR image. No repository clone, Node.js installation, patch command, or local Docker build is required. It is a drop-in replacement for `decolua/9router:latest` and keeps the upstream command, ports, environment variables, networks, `/app/data` path, and persistent configuration behavior.
-
-Change only the image:
-
-```diff
-services:
-  9router:
--   image: decolua/9router:latest
-+   image: ghcr.io/skulldorom/9router-auto-router:latest
-```
-
-**Use `latest` for automatic validated updates.** It can change when a newly validated `decolua/9router:latest` digest is released even if this repository's source commit did not change. Production environments requiring explicit change control should use the canonical `sha-<full-40-character-commit>` tag documented below.
-
-Keep the existing volume unchanged. In particular, this persistent 9Router configuration remains intact:
-
-```yaml
-volumes:
-  - 9router-data:/app/data
-```
-
-Accounts, settings, combos, provider configuration, ports, networks, and Headroom configuration continue to work without changes.
-
-### Complete Compose example
-
-```yaml
-services:
-  9router:
-    image: ghcr.io/skulldorom/9router-auto-router:latest
-    restart: unless-stopped
-    ports:
-      - "20128:20128"
-    volumes:
-      - 9router-data:/app/data
-    environment:
-      DATA_DIR: /app/data
-      HEADROOM_URL: http://headroom:8787
-    depends_on:
-      headroom:
-        condition: service_started
-
-  headroom:
-    image: ghcr.io/chopratejas/headroom:latest
-    container_name: headroom
-    restart: unless-stopped
-
-    # You don't actually need to expose this outside Docker.
-    # Uncomment for troubleshooting if desired.
-    #ports:
-    #  - "8787:8787"
-
-
-volumes:
-  9router-data:
-```
-
-`HEADROOM_URL: http://headroom:8787` is retained exactly. The Auto Router overlay does not need any Headroom-specific configuration.
-
-### Roll back to stock 9Router
-
-Change the image back to `decolua/9router:latest` and keep the existing `/app/data` volume. The overlay does not migrate or replace the `combos` schema; Auto Router configuration stays in normal per-combo strategy settings.
-
-A browser can retain the patched Next.js bundle after the container image changes. If the Combos page still shows the former frontend exception after rollback, hard refresh, clear cached site assets, or open a clean/private browser context before treating the persistent volume as damaged. Do not delete `/app/data` merely to clear a stale browser bundle.
-
-With the validated upstream image, a persisted `fallbackStrategy: "auto"` is handled as normal fallback delegation to that combo's model. The rollback integration test confirms this observed behavior, then changes the combo back to `fallback` through the stock API while preserving its models and unrelated settings.
-
-### Update and rollback
-
-`latest` is the automatically maintained validated tracking release. The scheduled compatibility check may move it when a new upstream 9Router image passes this project's complete compatibility and validation suite.
+Update normally with:
 
 ```sh
 docker compose pull
 docker compose up -d
 ```
 
-For production or reproducible deployments, pin the canonical immutable source identity: the full Git commit SHA tag.
+Before a new Auto Router image becomes `latest`, the release workflow resolves the upstream image to an immutable digest, validates compatibility, builds the overlay, and runs the project's validation suite.
+
+If an upstream change breaks the integration, publishing fails closed and the previous known-good `latest` remains available.
+
+A scheduled compatibility check runs every six hours and only rebuilds when the Auto Router source revision or upstream digest has changed.
+
+### Pinning and rollback
+
+For reproducible production deployments, pin the canonical full source revision tag:
 
 ```yaml
 services:
@@ -204,46 +302,116 @@ services:
     image: ghcr.io/skulldorom/9router-auto-router:sha-<full-40-character-auto-router-commit>
 ```
 
-`sha-<12-character-commit>` is a convenient short alias, not the canonical identity. Upstream-version variants are also published. Existing full and short SHA aliases are refused if they already identify a different source revision or upstream digest.
+Short SHA and upstream-version variants are also published, but the full SHA tag is the canonical immutable source identity.
 
-The GitHub Actions release workflow validates the exact `decolua/9router@sha256:...` base before building. It resolves `latest` once per publish attempt and passes that immutable digest through compatibility checking, Docker build, metadata, and validation. Before registry authentication or tagging, it observes upstream `latest` again and requires both the validated source revision and validated upstream digest to remain current. If upstream moved, it skips publication instead of rebuilding or publishing the stale artifact; the next scheduled or manual run validates the new digest from the beginning. CI intentionally resolves the current upstream image independently. Validation includes static checks, all tests, smoke/runtime/persistence checks, and a production HTTP-path test. A six-hour scheduled check rebuilds only if this source commit or the upstream digest changed; failed validation leaves the prior known-good `latest` untouched.
+To return to stock 9Router, change the image back:
 
+```diff
+services:
+  9router:
+-   image: ghcr.io/skulldorom/9router-auto-router:latest
++   image: decolua/9router:latest
+```
 
-## Dependabot
+Keep the existing `/app/data` volume.
 
-Dependabot checks the only ordinary dependency ecosystems in this overlay: `npm` and GitHub Actions, weekly. Compatible minor and patch updates are grouped; major updates remain separate. It does not auto-merge. Docker is deliberately not included: `decolua/9router:latest` is resolved by the dedicated current-upstream digest-validation pipeline, tested at that exact immutable digest, and only then used to publish. A blind Docker digest bump would weaken that release gate. Dependabot pull requests run the same blocking current-upstream CI job.
+The overlay does not migrate or replace the normal 9Router combo schema. Auto Router configuration remains in normal per-combo strategy settings.
 
-## Development and advanced local builds
+After changing images, a browser may retain a cached patched Next.js bundle. If the Combos page looks stale after rollback, hard-refresh or use a clean/private browser session before assuming the persistent volume is damaged.
 
-This project patches compiled Next.js assets. Upstream releases can require an overlay update; compatibility checks intentionally fail closed when semantic anchors, candidates, dispatches, UI structure, bindings, or patch integrity differ. The scheduled upstream validation detects incompatible releases before they replace the last-known-good production image. Do not make the patcher guess at a new compiled structure: review the upstream change, then update its guarded discovery and regression tests.
+## Upstream compatibility
 
-### Convenience/local build
+9Router Auto Router is an overlay rather than a fork of 9Router.
+
+The published image starts from the upstream 9Router image and adds Auto Router while preserving the upstream command, ports, environment variables, networks, persistence path, providers, accounts, models, and normal routing behavior.
+
+Because 9Router ships compiled Next.js assets, the overlay discovers the relevant runtime and UI structures using semantic and structural checks instead of relying on fixed minified filenames.
+
+Runtime discovery requires the expected 9Router semantic anchors and exactly the expected Fusion dispatch structure. Bindings are associated structurally with their dispatch paths rather than by arbitrary fixed byte windows.
+
+The UI patch similarly validates the expected strategy-selector structure before adding **Auto Router**, target selectors, and Advanced controls.
+
+If the expected runtime or UI structures cannot be identified unambiguously, the build stops instead of patching an uncertain upstream version.
+
+The compatibility checker and patcher use the same discovery logic, and the release pipeline validates the exact immutable upstream digest that is later used for the build.
+
+## Relationship to 9Router
+
+9Router continues to own:
+
+- providers and accounts;
+- authentication and quotas;
+- models;
+- fallback chains;
+- Round Robin;
+- capability routing;
+- request translation;
+- streaming and SSE;
+- tools;
+- provider execution.
+
+Auto Router adds one decision:
+
+```text
+Which existing 9Router combo should handle this request?
+```
+
+Everything after that decision is normal 9Router.
+
+## Development
+
+Normal users do **not** need to clone this repository, install Node.js, run the patcher, or build an image locally.
+
+Use:
+
+```text
+ghcr.io/skulldorom/9router-auto-router:latest
+```
+
+Local builds are intended for development, compatibility work, and testing.
+
+### Local build
 
 ```sh
 docker build -t 9router-auto-router .
 ```
 
-This intentionally uses the Dockerfile default, `decolua/9router:latest`. It is convenient for local work but is not reproducible over time.
+This uses the Dockerfile's default `decolua/9router:latest` base and is convenient for development, but it is not reproducible over time.
 
 ### Reproducible build
 
-Use an immutable upstream digest that passed compatibility checks. Production GitHub Actions already resolves, validates, and builds from this immutable-digest form.
+Use an immutable upstream digest:
 
 ```sh
-npm run check && npm test
-UPSTREAM_IMAGE=decolua/9router@sha256:<digest> ./scripts/check-upstream-compatibility.sh
+npm run check
+npm test
+
+UPSTREAM_IMAGE=decolua/9router@sha256:<digest> \
+  ./scripts/check-upstream-compatibility.sh
+
 docker build \
   --build-arg UPSTREAM_IMAGE="decolua/9router@sha256:<digest>" \
   --build-arg AUTO_ROUTER_REVISION="$(git rev-parse HEAD)" \
   --build-arg UPSTREAM_DIGEST=sha256:<digest> \
   --build-arg UPSTREAM_VERSION=<version> \
-  -t 9router-auto-router .
-./scripts/smoke-test.sh 9router-auto-router
-./scripts/runtime-test.sh 9router-auto-router
+  -t 9router-auto-router:local .
+
+./scripts/smoke-test.sh 9router-auto-router:local
+./scripts/runtime-test.sh 9router-auto-router:local
 ```
 
-Compatibility errors report the image, candidate count/files, expected semantic anchors, and failure reason without dumping minified source.
+The test suite covers deterministic classification, false-positive regressions, routing, target validation, configuration precedence, UI integration, semantic/structural upstream discovery, persistence, runtime behavior, and the patched-container HTTP request path.
 
-The compiled-runtime patcher discovers assets by semantic anchors and data-flow characteristics rather than fixed minified names where practical, but a few bindings must remain structurally strict. The runtime resolver alias is read from its own call site and captured before any later inner rebinding, so harmless minifier renaming is handled; the dispatch delegate is likewise reconstructed from the discovered `handleSingleModel` call. Fusion dispatch bindings are located by parsing the dispatch's object literal and walking enclosing brace scopes, matching the branch's own strategy, combo name, and models binding, so they are not constrained to a fixed byte window around the anchor; a required binding that is missing or matches ambiguously stops the build. UI candidate shape, the strategy selector anchor, and the exact persisted-binding positions are still matched by data flow.
+Compatibility failures report the relevant image, candidate information, expected semantic structures, and failure reason without dumping minified source.
 
-No runtime dependencies are added. `package.json` version `0.1.0` is private-package metadata, not a production release identity; production images rely on immutable source/upstream tags and labels. Tests cover deterministic classification, realistic sanitized OpenHands fixtures, history reclassification, bounded keyword scoring, weak-domain false-positive regressions, modality weighting, one-route/no-fan-out selection, body/tools/stream preservation, ordinary-target delegation, explicit self/auto/stale target rejection, resolver-failure propagation that is not reported as a missing target and does not poison later requests, defense-in-depth recursion protection, per-field precedence, server/client UI semantic fixtures, labels, empty-self target filtering, semantic discovery, structural discovery beyond the former fixed byte windows with unrelated decoys, zero/multiple/ambiguous candidate failures, idempotence, compatibility checks, Docker build, smoke tests, runtime responses, authenticated `/api/settings` persistence across a restart, and a patched-container HTTP-path test. The HTTP test boots the patched container with a deterministic local OpenAI-compatible mock provider, sends easy and hard OpenAI-compatible requests through the normal `/api/v1/chat/completions` path, and proves the patched auto strategy selects exactly one normal target combo, preserves body/stream/tools into delegation, executes the selected combo through normal 9Router handling, and fails closed with a controlled error for missing targets, self-targets, and Auto Router → Auto Router targets.
+## Dependabot
+
+Dependabot checks the ordinary dependency ecosystems in this overlay: npm and GitHub Actions.
+
+Compatible minor and patch updates are grouped, major updates remain separate, and updates are not auto-merged.
+
+Docker is deliberately handled by the dedicated upstream digest-validation pipeline instead of blind dependency bumps, because a new 9Router image must pass compatibility and runtime validation before it can replace the known-good Auto Router image.
+
+## License
+
+MIT
