@@ -14,14 +14,16 @@ const serverUi = 'let bI=[{value:"fallback",label:"Fallback — try in order"},{
 const clientUi = 'let f=[{value:"fallback",label:"Fallback — try in order"},{value:"round-robin",label:"Round Robin — rotate"},{value:"fusion",label:"Fusion — panel + judge"}];function g({combo:e,getCaps:t,activeProviders:s=[],copied:i,onCopy:n,onEdit:r,onDelete:o,strategy:c={},onSetStrategy:m}){let[x,p]=(0,a.useState)(!1),u=c.fallbackStrategy||"fallback",h=c.judgeModel||"";return(0,l.jsxs)(d.Zp,{children:[(0,l.jsx)(d.l6,{options:f,value:u,onChange:e=>m({fallbackStrategy:e.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===u&&"details"]})}strategy:y[e.name]||{},onSetStrategy:t=>_(e.name,t);const comboCollection=[{name:"coder"},{name:"coder-high"},{name:"coder-auto"}],currentCombo=comboCollection[2];comboCollection.map(e=>(0,l.jsx)(g,{combo:e,strategy:y[e.name]||{},onSetStrategy:t=>_(e.name,t)}))';
 const aliasedServerUi = 'let strategies=[{value:"fallback",label:"Fallback — try in order"},{value:"round-robin",label:"Round Robin — rotate"},{value:"fusion",label:"Fusion — panel + judge"}];function RenderCombo({copied:z,onSetStrategy:save,combo:model,strategy:config={},getCaps:caps,onDelete:drop}){let[open,setOpen]=(0,React.useState)(!1),selected=config.fallbackStrategy||"fallback",judge=config.judgeModel||"";return(0,View.jsxs)(Panel.Zp,{children:[(0,View.jsx)(Panel.l6,{options:strategies,value:selected,onChange:change=>save({fallbackStrategy:change.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===selected&&"details"]})}strategy:allStrategies[model.name]||{},onSetStrategy:next=>commit(model.name,next);const comboCollection=[{name:"coder"},{name:"coder-high"},{name:"coder-auto"}],currentCombo=comboCollection[2];comboCollection.map(model=>(0,View.jsx)(RenderCombo,{combo:model,strategy:allStrategies[model.name]||{},onSetStrategy:next=>commit(model.name,next)}))';
 const aliasedClientUi = 'let choices=[{value:"fallback",label:"Fallback — try in order"},{value:"round-robin",label:"Round Robin — rotate"},{value:"fusion",label:"Fusion — panel + judge"}];function ClientCombo({strategy:settings={},combo:record,onSetStrategy:write,copied:copied}){let[shown,setShown]=(0,Hooks.useState)(!1),kind=settings.fallbackStrategy||"fallback",judge=settings.judgeModel||"";return(0,Jsx.jsxs)(Card.Zp,{children:[(0,Jsx.jsx)(Card.l6,{options:choices,value:kind,onChange:input=>write({fallbackStrategy:input.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===kind&&"details"]})}strategy:table[record.name]||{},onSetStrategy:value=>persist(record.name,value);const comboCollection=[{name:"coder"},{name:"coder-high"},{name:"coder-auto"}],currentCombo=comboCollection[2];comboCollection.map(record=>(0,Jsx.jsx)(ClientCombo,{combo:record,strategy:table[record.name]||{},onSetStrategy:value=>persist(record.name,value)}))';
-function fixture({ duplicate = false, valid = true, shadow = false, aliases = false, handler: handlerOverride } = {}) {
+const shadowingServerUi = serverUi.replace('combo:a,', 'combo:t,').replace('k[a.name]', 'k[t.name]').replace('A(a.name,b)', 'A(t.name,b)').replace('const comboCollection=[{name:"coder"},{name:"coder-high"},{name:"coder-auto"}],currentCombo=comboCollection[2];comboCollection.map(a=>', 'const t=[{name:"coder"},{name:"coder-high"},{name:"coder-auto"}];t.map(t=>unrelated(t));t.map(t=>').replace('{combo:a,strategy:k[a.name]||{},onSetStrategy:b=>A(a.name,b)}', '{combo:t,strategy:k[t.name]||{},onSetStrategy:b=>A(t.name,b)}');
+const shadowingClientUi = clientUi.replace('combo:e,', 'combo:t,').replace('y[e.name]', 'y[t.name]').replace('_(e.name,t)', '_(t.name,t)').replace('const comboCollection=[{name:"coder"},{name:"coder-high"},{name:"coder-auto"}],currentCombo=comboCollection[2];comboCollection.map(e=>', 'const t=[{name:"coder"},{name:"coder-high"},{name:"coder-auto"}];t.map(t=>unrelated(t));t.map(t=>').replace('{combo:e,strategy:y[e.name]||{},onSetStrategy:t=>_(e.name,t)}', '{combo:t,strategy:y[t.name]||{},onSetStrategy:e=>_(t.name,e)}');
+function fixture({ duplicate = false, valid = true, shadow = false, aliases = false, shadowingUi = false, handler: handlerOverride } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "auto-router-patch-"));
   const server = path.join(dir, ".next/server/chunks"), serverUiDir = path.join(dir, ".next/server/app/dashboard/combos"), clientUiDir = path.join(dir, ".next/static/chunks/app/dashboard/combos");
   fs.mkdirSync(server, { recursive: true }); fs.mkdirSync(serverUiDir, { recursive: true }); fs.mkdirSync(clientUiDir, { recursive: true });
   const handler = shadow ? `${runtime("c", "f", "d", "u", "k", "e", "r")}${shadowRuntime("a", "j", "b", "f", "g")}` : `${runtime("c", "f", "d", "u", "k", "e", "r")}${nestedRuntime("a", "j", "b", "f", "g", "i", "h")}`;
   if (valid) fs.writeFileSync(path.join(server, "dynamic-handler.js"), handlerOverride || handler);
   if (duplicate) fs.writeFileSync(path.join(server, "another-handler.js"), `${runtime("c", "f", "d", "u", "k", "e", "r")}${nestedRuntime("a", "j", "b", "f", "g", "i", "h")}`);
-  fs.writeFileSync(path.join(serverUiDir, "page.js"), aliases ? aliasedServerUi : serverUi); fs.writeFileSync(path.join(clientUiDir, "page-hash.js"), aliases ? aliasedClientUi : clientUi);
+  fs.writeFileSync(path.join(serverUiDir, "page.js"), shadowingUi ? shadowingServerUi : aliases ? aliasedServerUi : serverUi); fs.writeFileSync(path.join(clientUiDir, "page-hash.js"), shadowingUi ? shadowingClientUi : aliases ? aliasedClientUi : clientUi);
   return dir;
 }
 // Mirrors the supported upstream image: extra properties follow `handleSingleModel`, and
@@ -58,16 +60,61 @@ test("patcher dynamically discovers runtime and UI assets, patches once, and is 
   assert.match(patchedUi, /hardTarget/);
   assert.match(patchedUi, /hardThreshold/); assert.match(patchedUi, /value:_arHard/); assert.match(patchedUi, /onChange:event=>_arSetHard\(event\.target\.value\)/); assert.match(patchedUi, /useEffect/); assert.ok(!patchedUi.includes("defaultValue:"));
   for (const label of ["Easy target", "Hard target", "Advanced", "Hard threshold (default 6; recommended 4–10)", "Long context threshold (characters) (default 24000)", "Large tool-result threshold (characters) (default 12000)", "Many-tools threshold (default 16)", "Verbose logging"]) assert.ok(patchedUi.includes(label));
-  assert.match(patchedUi, /availableCombos:_arComboCollection\.map\(t=>\(\{name:t\.name,strategy:y\[t\.name\]\|\|\{\}\}\)\)/);
-  assert.doesNotMatch(patchedUi, /availableCombos:e\.map\(/);
+  assert.match(patchedUi, /availableCombos:comboCollection\.map\(t=>\(\{name:t\.name,strategy:y\[t\.name\]\|\|\{\}\}\)\)/);
+  assert.doesNotMatch(patchedUi, /availableCombos:e\.map\(|_arComboCollection/);
   assert.match(patchedUi, /filter\(entry=>entry\.name!==e\.name&&entry\.strategy\.fallbackStrategy!=="auto"\)/);
   assert.match(patchedUi, /missing or Auto Router — unsupported target/); assert.match(patchedUi, /disabled:!0/);
   const patchedServerUi = fs.readFileSync(path.join(dir, ".next/server/app/dashboard/combos/page.js"), "utf8");
   for (const label of ["Easy target", "Hard target", "Advanced", "Hard threshold (default 6; recommended 4–10)", "Long context threshold (characters) (default 24000)", "Large tool-result threshold (characters) (default 12000)", "Many-tools threshold (default 16)", "Verbose logging"]) assert.ok(patchedServerUi.includes(label));
   assert.match(patchedServerUi, /value:_arHard/); assert.match(patchedServerUi, /onChange:event=>_arSetHard\(event\.target\.value\)/); assert.match(patchedServerUi, /useEffect/); assert.ok(!patchedServerUi.includes("defaultValue:"));
-  assert.match(patchedServerUi, /availableCombos:_arComboCollection\.map\(b=>\(\{name:b\.name,strategy:k\[b\.name\]\|\|\{\}\}\)\)/);
-  assert.doesNotMatch(patchedServerUi, /availableCombos:a\.map\(/);
+  assert.match(patchedServerUi, /availableCombos:comboCollection\.map\(b=>\(\{name:b\.name,strategy:k\[b\.name\]\|\|\{\}\}\)\)/);
+  assert.doesNotMatch(patchedServerUi, /availableCombos:a\.map\(|_arComboCollection/);
   assert.match(patchedServerUi, /filter\(entry=>entry\.name!==a\.name&&entry\.strategy\.fallbackStrategy!=="auto"\)/);
+});
+
+test("patcher leaves an earlier same-alias map untouched and anchors available combos to ComboCard", () => {
+  const dir = fixture();
+  const files = [
+    path.join(dir, ".next/server/app/dashboard/combos/page.js"),
+    path.join(dir, ".next/static/chunks/app/dashboard/combos/page-hash.js"),
+  ];
+  for (const file of files) {
+    const source = fs.readFileSync(file, "utf8");
+    const renderStart = source.indexOf("comboCollection.map(");
+    assert.ok(renderStart >= 0, `missing ComboCard render in ${file}`);
+    const entry = source[renderStart + "comboCollection.map(".length];
+    assert.match(entry, /^[ae]$/);
+    fs.writeFileSync(file, `${source.slice(0, renderStart)}comboCollection.map(${entry}=>unrelated(${entry}));${source.slice(renderStart)}`);
+  }
+  const first = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
+  assert.equal(first.status, 0, first.stderr);
+  const second = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
+  assert.equal(second.status, 0, second.stderr);
+  for (const file of files) {
+    const patched = fs.readFileSync(file, "utf8");
+    assert.match(patched, /comboCollection\.map\(([ae])=>unrelated\(\1\)\);/);
+    assert.match(patched, /comboCollection\.map\(([ae])=>\(0,[wl]\.jsx\)\([^,]+,\{combo:\1,availableCombos:comboCollection\.map\(/);
+    assert.doesNotMatch(patched, /_arComboCollection|availableCombos:[ae]\.map\(/);
+  }
+});
+
+
+
+test("patcher binds the exact shadowing ComboCard map source array", () => {
+  const dir = fixture({ shadowingUi: true });
+  const files = [
+    path.join(dir, ".next/server/app/dashboard/combos/page.js"),
+    path.join(dir, ".next/static/chunks/app/dashboard/combos/page-hash.js"),
+  ];
+  const result = spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  for (const file of files) {
+    const patched = fs.readFileSync(file, "utf8");
+    assert.match(patched, /t\.map\(t=>unrelated\(t\)\);/);
+    assert.match(patched, /t\.map\(\(t,_arComboIndex,_arComboCollection\)=>\(0,[wl]\.jsx\)\([^,]+,\{combo:t,availableCombos:_arComboCollection\.map\(/);
+    assert.doesNotMatch(patched, /availableCombos:t\.map\(/);
+  }
+  assert.equal(spawnSync(process.execPath, [patcher, dir], { encoding: "utf8" }).status, 0);
 });
 
 test("patcher derives harmlessly renamed UI aliases from local data flow", () => {

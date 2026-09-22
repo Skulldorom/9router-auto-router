@@ -22,31 +22,100 @@ printf '%s\n' 'const http=require("http");http.createServer((q,s)=>{q.resume();q
 chmod 644 "$MOCK_DIR/server.cjs"
 docker network create "$NETWORK" >/dev/null
 docker run -d --name "$MOCK_NAME" --network "$NETWORK" -v "$MOCK_DIR:/journal" -w /journal node:22-alpine node server.cjs >/dev/null
-start() { image=$1; rm -f "$COOKIE_JAR"; docker run -d --name "$NAME" --network "$NETWORK" -v "$DATA_DIR:/app/data" -e NODE_ENV=production -e INITIAL_PASSWORD="$PASSWORD" -p 127.0.0.1::20128 "$image" >/dev/null; PORT=$(docker port "$NAME" 20128/tcp | sed 's/.*://'); wait_for_login "http://127.0.0.1:$PORT/api/auth/login" "$COOKIE_JAR" "$PASSWORD" 60 || { dump_container_logs "$NAME"; exit 1; }; }
+start() { image=$1; rm -f "$COOKIE_JAR"; docker run -d --name "$NAME" --network "$NETWORK" --network-alias router -v "$DATA_DIR:/app/data" -e NODE_ENV=production -e INITIAL_PASSWORD="$PASSWORD" -p 127.0.0.1::20128 "$image" >/dev/null; PORT=$(docker port "$NAME" 20128/tcp | sed 's/.*://'); wait_for_login "http://127.0.0.1:$PORT/api/auth/login" "$COOKIE_JAR" "$PASSWORD" 60 || { dump_container_logs "$NAME"; exit 1; }; }
 stop() { docker rm -f "$NAME" >/dev/null; }
 api() { curl --fail --silent --show-error --cookie "$COOKIE_JAR" -H 'Content-Type: application/json' "$@"; }
 settings() { api "http://127.0.0.1:$PORT/api/settings"; }
 combos() { api "http://127.0.0.1:$PORT/api/combos"; }
 assert_data() { settings | grep -q 'unrelatedRollbackSetting'; combos | grep -q 'coder-high'; combos | grep -q 'coder-auto'; combos | grep -q 'coder-model'; }
 browser_combos() {
-  phase=$1
-  docker run --rm --add-host=host.docker.internal:host-gateway -e BASE_URL="http://host.docker.internal:$PORT" -e PASSWORD="$PASSWORD" -e PHASE="$phase" "$PLAYWRIGHT_IMAGE" node - <<'NODE'
-const { chromium } = require("playwright");
+  phase=$1; configure=${2:-false}
+  if browser_output=$(docker run --rm -i --network "$NETWORK" -e BASE_URL="http://router:20128" -e PASSWORD="$PASSWORD" -e PHASE="$phase" -e CONFIGURE="$configure" "$PLAYWRIGHT_IMAGE" sh -c 'mkdir -p /tmp/auto-router-playwright && cd /tmp/auto-router-playwright && { [ -d node_modules/playwright ] || { npm init -y >/dev/null && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-save playwright@1.58.2 >/dev/null; }; } && exec node -' <<'NODE'
+const { chromium } = require("/tmp/auto-router-playwright/node_modules/playwright");
+const phase = process.env.PHASE;
 (async () => {
-  const errors = [];
+  console.log(`AUTO_ROUTER_BROWSER_TEST_START:${phase}`);
+  const errors = [], diagnostics = [];
+  const relevant = url => url.includes("/login") || url.includes("/dashboard/combos") || url.includes("/_next/") || url.includes("/api/");
+  const record = message => diagnostics.push(message);
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
-  page.on("pageerror", error => errors.push(error.stack || error.message));
-  const login = await page.request.post(`${process.env.BASE_URL}/api/auth/login`, { data: { password: process.env.PASSWORD } });
-  if (!login.ok()) throw new Error(`login failed: ${login.status()}`);
-  await page.goto(`${process.env.BASE_URL}/dashboard/combos`, { waitUntil: "networkidle" });
-  for (const combo of ["coder", "coder-high", "coder-auto"]) await page.getByText(combo, { exact: true }).first().waitFor();
-  if (errors.length) throw new Error(`${process.env.PHASE} Combos page errors:\\n${errors.join("\\n")}`);
+  page.on("console", message => {
+    if (["error", "warning"].includes(message.type())) record(`console ${message.type()}: ${message.text()}`);
+  });
+  page.on("pageerror", error => { const message = error.stack || error.message; errors.push(message); record(`pageerror: ${message}`); });
+  page.on("requestfailed", request => {
+    if (relevant(request.url())) record(`requestfailed ${request.method()} ${request.url()}: ${request.failure()?.errorText || "unknown"}`);
+  });
+  page.on("response", response => {
+    const request = response.request();
+    if (relevant(response.url()) && (request.isNavigationRequest() || response.status() >= 300)) record(`response ${response.status()} ${response.statusText()} ${request.method()} ${response.url()}`);
+  });
+  const describe = async label => {
+    const cookies = (await context.cookies(process.env.BASE_URL)).map(({ name, domain, path, secure, httpOnly, sameSite, expires }) => ({ name, domain, path, secure, httpOnly, sameSite, expires }));
+    console.error(`AUTO_ROUTER_BROWSER_DIAGNOSTIC:${phase}:${label} base=${process.env.BASE_URL} url=${page.url()} cookies=${JSON.stringify(cookies)} events=${JSON.stringify(diagnostics)}`);
+  };
+  const assertNoErrors = () => {
+    if (errors.length) throw new Error(`${phase} Combos page errors:\\n${errors.join("\\n")}`);
+  };
+  let login;
+  try {
+    login = await page.request.post(`${process.env.BASE_URL}/api/auth/login`, { data: { password: process.env.PASSWORD } });
+  } catch (error) {
+    throw new Error(`cannot reach ${process.env.BASE_URL}: ${error.message}`);
+  }
+  if (!login.ok()) throw new Error(`login failed at ${process.env.BASE_URL}: ${login.status()}`);
+  const authCookie = login.headers()["set-cookie"]?.match(/auth_token=([^;]+)/)?.[1];
+  if (!authCookie) throw new Error(`login at ${process.env.BASE_URL} returned no auth_token cookie`);
+  await context.addCookies([{ name: "auth_token", value: authCookie, url: process.env.BASE_URL }]);
+  await describe("after-auth-cookie");
+  let navigation;
+  try {
+    navigation = await page.goto(`${process.env.BASE_URL}/dashboard/combos`, { waitUntil: "networkidle" });
+  } catch (error) {
+    await describe("goto-threw");
+    throw error;
+  }
+  record(`goto ${navigation?.status() || "no-response"} ${navigation?.statusText() || ""} final=${page.url()}`);
+  await describe("after-goto");
+  for (const combo of ["coder", "coder-high", "coder-auto"]) {
+    const card = page.getByText(combo, { exact: true }).first();
+    try {
+      await card.waitFor({ timeout: 10_000 });
+    } catch {
+      await describe(`missing-${combo}`);
+      throw new Error(`${phase} missing visible ${combo} combo card at ${page.url()}: ${(await page.locator("body").innerText()).slice(0, 500)}`);
+    }
+    if (!await card.isVisible()) throw new Error(`${phase} missing visible ${combo} combo card`);
+  }
+  assertNoErrors();
+  if (process.env.CONFIGURE === "true") {
+    const autoCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//select][1]");
+    await autoCard.locator("select").first().selectOption("auto");
+    await page.getByLabel("Easy target").selectOption("coder");
+    await page.getByLabel("Hard target").selectOption("coder-high");
+    await page.waitForTimeout(250);
+    assertNoErrors();
+    await page.reload({ waitUntil: "networkidle" });
+    if (await autoCard.locator("select").first().inputValue() !== "auto") throw new Error(`${phase} did not persist Auto Router selection`);
+    if (await page.getByLabel("Easy target").inputValue() !== "coder") throw new Error(`${phase} did not persist Easy target`);
+    if (await page.getByLabel("Hard target").inputValue() !== "coder-high") throw new Error(`${phase} did not persist Hard target`);
+    assertNoErrors();
+  }
   await context.close();
   await browser.close();
+  console.log(`AUTO_ROUTER_BROWSER_TEST_COMPLETE:${phase}`);
 })().catch(error => { console.error(error); process.exit(1); });
 NODE
+); then :; else
+    status=$?
+    printf '%s\n' "$browser_output" >&2
+    exit "$status"
+  fi
+  printf '%s\n' "$browser_output"
+  printf '%s\n' "$browser_output" | grep -Fq "AUTO_ROUTER_BROWSER_TEST_START:$phase" || { echo "Browser test did not start: $phase" >&2; exit 1; }
+  printf '%s\n' "$browser_output" | grep -Fq "AUTO_ROUTER_BROWSER_TEST_COMPLETE:$phase" || { echo "Browser test did not complete: $phase" >&2; exit 1; }
 }
 
 start "$UPSTREAM_IMAGE"
@@ -56,9 +125,8 @@ api -X PATCH --data '{"unrelatedRollbackSetting":"preserve-me"}' "http://127.0.0
 assert_data; stop
 
 start "$IMAGE"
-browser_combos patched-before-auto
-api -X PATCH --data '{"comboStrategies":{"coder-auto":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"coder","hardTarget":"coder-high"}}},"unrelatedRollbackSetting":"preserve-me"}' "http://127.0.0.1:$PORT/api/settings" >/dev/null
-settings | grep -q 'fallbackStrategy":"auto'; assert_data
+browser_combos patched-before-auto true
+settings | grep -q 'fallbackStrategy":"auto'; settings | grep -q '"easyTarget":"coder"'; settings | grep -q '"hardTarget":"coder-high"'; assert_data
 KEY=$(api -X POST --data '{"name":"rollback"}' "http://127.0.0.1:$PORT/api/keys" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).key))')
 curl --fail --silent -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" --data '{"model":"coder-auto","messages":[{"role":"user","content":"rename this"}]}' "http://127.0.0.1:$PORT/api/v1/chat/completions" | grep -q 'ok'
 stop
@@ -74,5 +142,5 @@ settings | grep -q 'fallbackStrategy":"fallback'; combos | grep -q 'coder-auto-m
 start "$IMAGE"; assert_data
 browser_combos patched-after-recovery
 api -X PATCH --data '{"comboStrategies":{"coder-auto":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"coder","hardTarget":"coder-high"}}},"unrelatedRollbackSetting":"preserve-me"}' "http://127.0.0.1:$PORT/api/settings" >/dev/null
-settings | grep -q 'fallbackStrategy":"auto'; browser_combos patched-reconfigured
+settings | grep -q 'fallbackStrategy":"auto'; browser_combos patched-reconfigured true
 echo "Rollback compatibility test passed: stock → Auto Router → stock → Auto Router used one /app/data volume; stock delegates persisted fallbackStrategy:auto to the combo model, and recovery to fallback preserves combo models and unrelated settings."
