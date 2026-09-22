@@ -59,13 +59,31 @@ test("derived image verification precedes every image integration test", () => {
   const runtime = validate.indexOf("./scripts/runtime-test.sh");
   const persistence = validate.indexOf("./scripts/settings-persistence-test.sh");
   const http = validate.indexOf("./scripts/auto-router-http-test.sh");
-  assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http);
+  const rollback = validate.indexOf("./scripts/rollback-compatibility-test.sh");
+  assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http && http < rollback);
   assert.match(validate, /verify-built-image\.sh "\$\{\{ inputs\.image_tag \}\}" "\$REVISION" "\$UPSTREAM_DIGEST"/);
   const verifier = fs.readFileSync(path.join(root, "scripts/verify-built-image.sh"), "utf8");
   for (const required of ["auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v3", "Easy target", "Hard target", "org.opencontainers.image.revision", "upstream.digest", "availableCombos:"]) assert.ok(verifier.includes(required));
   for (const cardinality of ['label:\\"Auto Router\\"', "9router-auto-router-ui:v3", "Easy target", "Hard target"]) assert.ok(verifier.includes(`grep -o "${cardinality}" "$file" | wc -l`));
   assert.doesNotMatch(verifier, /page-hash|app\/dashboard\/combos\/page/);
 });
+
+test("rollback browser regression attaches stdin, verifies execution markers, and saves through the UI", () => {
+  const rollback = fs.readFileSync(path.join(root, "scripts/rollback-compatibility-test.sh"), "utf8");
+  assert.match(rollback, /docker run --rm -i --network "\$NETWORK".*exec node -' <<'NODE'/);
+  assert.match(rollback, /AUTO_ROUTER_BROWSER_TEST_START:\$\{phase\}/);
+  assert.match(rollback, /AUTO_ROUTER_BROWSER_TEST_COMPLETE:\$\{phase\}/);
+  assert.match(rollback, /Browser test did not start/);
+  assert.match(rollback, /Browser test did not complete/);
+  assert.match(rollback, /page\.on\("pageerror"/);
+  assert.match(rollback, /page\.waitForResponse\(response => response\.url\(\)\.includes\("\/api\/settings"\) && response\.request\(\)\.method\(\) === "PATCH" && response\.ok\(\)\)/);
+  assert.match(rollback, /page\.waitForFunction\(async \(\) =>/);
+  assert.doesNotMatch(rollback, /waitForTimeout\(250\)/);
+  assert.match(rollback, /getByLabel\("Easy target"\)\.selectOption\("coder"\)/);
+  assert.match(rollback, /getByLabel\("Hard target"\)\.selectOption\("coder-high"\)/);
+  assert.match(rollback, /browser_combos patched-before-auto true/);
+});
+
 
 test("lint blocks warnings and restricts CommonJS globals to runtime code", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
