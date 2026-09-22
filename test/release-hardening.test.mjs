@@ -59,8 +59,9 @@ test("derived image verification precedes every image integration test", () => {
   const runtime = validate.indexOf("./scripts/runtime-test.sh");
   const persistence = validate.indexOf("./scripts/settings-persistence-test.sh");
   const http = validate.indexOf("./scripts/auto-router-http-test.sh");
+  const parity = validate.indexOf("./scripts/auto-router-pipeline-parity-test.sh");
   const rollback = validate.indexOf("./scripts/rollback-compatibility-test.sh");
-  assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http && http < rollback);
+  assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http && http < parity && parity < rollback);
   assert.match(validate, /verify-built-image\.sh "\$\{\{ inputs\.image_tag \}\}" "\$REVISION" "\$UPSTREAM_DIGEST"/);
   const verifier = fs.readFileSync(path.join(root, "scripts/verify-built-image.sh"), "utf8");
   for (const required of ["auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v4", "Easy target", "Hard target", "Advanced", "org.opencontainers.image.revision", "upstream.digest", "availableCombos:"]) assert.ok(verifier.includes(required));
