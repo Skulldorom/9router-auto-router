@@ -153,12 +153,27 @@ test("Auto Router is a strategy option and upstream strategies are preserved", (
   assert.equal(patch(dir).status, 0);
   for (const file of uiFiles(dir)) {
     const patched = fs.readFileSync(file, "utf8");
-    const options = /(?:let|const)\s+[A-Za-z_$][\w$]*=\[([^;]*?)\];/.exec(patched)[1];
+    const options = /[A-Za-z_$][\w$]*=\[([^;]*?)\][^;]*;/.exec(patched)[1];
     assert.match(options, /label:"Fallback — try in order"/);
     assert.match(options, /label:"Round Robin — rotate"/);
     assert.match(options, /label:"Fusion — panel \+ judge"/);
     assert.match(options, /label:"Auto Router"/);
     assert.equal((patched.match(/label:"Auto Router"/g) || []).length, 2);
+  }
+});
+
+test("strategy option discovery follows the card selector through a var binding and preserves added upstream options", () => {
+  const extra = `,{value:"adaptive",label:"Adaptive — tune per request"}`;
+  const server = serverUi.replace("let bI=[", "var bI = [").replace("}];function bJ", `}${extra}];function bJ`);
+  const client = clientUi.replace("let f1=[", "var f1 = [").replace("}];function g1", `}${extra}];function g1`);
+  const dir = fixture({ server, client });
+  const result = patch(dir);
+  assert.equal(result.status, 0, result.stderr);
+  for (const file of uiFiles(dir)) {
+    const patched = fs.readFileSync(file, "utf8");
+    parses(patched);
+    assert.match(patched, /value:"adaptive",label:"Adaptive — tune per request"/);
+    assert.match(patched, /value:"auto",label:"Auto Router"/);
   }
 });
 
