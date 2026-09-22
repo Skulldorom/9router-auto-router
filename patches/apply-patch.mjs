@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
 
 const appRoot = process.argv[2] || "/app";
 const checkOnly = process.argv.includes("--check");
 const runtimeMarker = "9router-auto-router:v3";
-const uiMarker = "9router-auto-router-ui:v3";
+const uiMarker = "9router-auto-router-ui:v4";
 const UI_ANCHOR = '"fusion",label:"Fusion — panel + judge"';
 const UI_PATCH = '"fusion",label:"Fusion — panel + judge"},{value:"auto",label:"Auto Router"';
 
@@ -197,143 +200,172 @@ function discoverUiCandidates() {
   if (candidates.length !== 2) fail(`Combo UI strategy asset candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  Fallback — try in order, Round Robin — rotate, Fusion — panel + judge`);
   return candidates;
 }
-function propertyValues(content) {
-  const fields = new Map();
-  for (const property of splitTopLevelProperties(content)) {
-    const separator = property.indexOf(":");
-    if (separator <= 0) return null;
-    const key = property.slice(0, separator).trim();
-    if (fields.has(key)) return null;
-    fields.set(key, property.slice(separator + 1).trim());
+// The derived image does not ship a top-level acorn install; upstream bundles one under
+// Next.js. Resolve a parser from the project first (npm ci) and fall back to the upstream
+// copy so `RUN node apply-patch.mjs /app` keeps working without enlarging the build context.
+let parser;
+function loadParser() {
+  if (parser) return parser;
+  for (const candidate of ["acorn", path.join(appRoot, "node_modules/next/dist/compiled/acorn"), "/app/node_modules/next/dist/compiled/acorn"]) {
+    try {
+      const loaded = require(candidate);
+      if (typeof loaded.parse === "function") { parser = loaded.parse; return parser; }
+    } catch { /* try the next candidate */ }
   }
-  return fields;
+  fail("No JavaScript parser (acorn) is available for the Combo UI transformation.");
 }
-function matchClosingBrace(source, open) {
-  let depth = 0, quote = null;
-  for (let index = open; index < source.length; index += 1) {
-    const char = source[index];
-    if (quote) {
-      if (char === "\\") { index += 1; continue; }
-      if (char === quote) quote = null;
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") { quote = char; continue; }
-    if (char === "{") depth += 1;
-    if (char === "}" && --depth === 0) return index;
+function parseJavaScript(source, target) {
+  try { return loadParser()(source, { ecmaVersion: "latest", sourceType: "script", ranges: true }); }
+  catch (error) { fail(`Combo UI JavaScript cannot be parsed:\n  ${path.relative(appRoot, target)}\n\n${error.message}`); }
+}
+function walkAst(node, parent = null, visit = () => {}) {
+  if (!node || typeof node !== "object" || !node.type) return;
+  visit(node, parent);
+  for (const [key, value] of Object.entries(node)) {
+    if (["parent", "start", "end", "loc", "range"].includes(key)) continue;
+    if (Array.isArray(value)) for (const item of value) walkAst(item, node, visit);
+    else walkAst(value, node, visit);
   }
-  return -1;
 }
-function patchedCardCandidates(source) {
-  const identifier = String.raw`[A-Za-z_$][\w$]*`;
-  const render = new RegExp(`(${identifier})\\.map\\((?:(${identifier})=>|\\((${identifier}),(_arComboIndex),(_arComboCollection)\\)=>)\\(0,(${identifier})\\.jsx\\)\\((${identifier}),\\{`, "g");
-  return [...source.matchAll(render)].flatMap((match) => {
-    const [, collection, directEntry, shadowEntry, indexBinding, sourceBinding, , component] = match;
-    const entry = directEntry || shadowEntry;
-    const objectOpen = match.index + match[0].length - 1;
-    const objectClose = matchClosingBrace(source, objectOpen);
-    if (objectClose < 0 || (!directEntry && (indexBinding !== "_arComboIndex" || sourceBinding !== "_arComboCollection"))) return [];
-    const fields = propertyValues(source.slice(objectOpen + 1, objectClose));
-    if (!fields || fields.get("combo") !== entry || (!sourceBinding && collection === entry)) return [];
-    const strategy = fields.get("strategy"), update = fields.get("onSetStrategy"), available = fields.get("availableCombos");
-    const strategyMatch = strategy?.match(new RegExp(`^(${identifier})\\[${escapePattern(entry)}\\.name\\]\\|\\|\\{\\}$`));
-    const updateMatch = update?.match(new RegExp(`^(${identifier})=>(${identifier})\\(${escapePattern(entry)}\\.name,\\1\\)$`));
-    const availableMatch = available?.match(new RegExp(`^${escapePattern(sourceBinding || collection)}\\.map\\((${identifier})=>\\(\\{name:\\1\\.name,strategy:(${identifier})\\[\\1\\.name\\]\\|\\|\\{\\}\\}\\)\\)$`));
-    if (!strategyMatch || !updateMatch || !availableMatch || strategyMatch[1] !== availableMatch[2]) return [];
-    return [{ collection, entry, component, fields, sourceBinding }];
-  });
+function keyName(item) { return item?.key?.type === "Identifier" ? item.key.name : item?.key?.value; }
+function objectProperty(object, name) { return object?.properties?.find((entry) => keyName(entry) === name); }
+function identifier(node) { return node?.type === "Identifier" ? node.name : null; }
+function unchain(node) { return node?.type === "ChainExpression" ? node.expression : node; }
+function literal(node, value) { return unchain(node)?.type === "Literal" ? unchain(node).value === value : false; }
+// Accept both jsx and jsxs runtime exports; upstream emits jsxs for multi-child elements.
+function jsxCall(node) { return node?.type === "CallExpression" && node.callee?.type === "SequenceExpression" && node.callee.expressions.length === 2 && node.callee.expressions[0].type === "Literal" && node.callee.expressions[0].value === 0 && node.callee.expressions[1].type === "MemberExpression" && ["jsx", "jsxs"].includes(node.callee.expressions[1].property?.name); }
+function one(items, name, target) {
+  if (items.length !== 1) fail(`Auto Router UI semantic anchor is not unique (${name}):\n  ${path.relative(appRoot, target)}\n\nExpected exactly 1; found ${items.length}.`);
+  return items[0];
 }
-function verifyPatchedUi(target, source = fs.readFileSync(target, "utf8")) {
-  const cards = patchedCardCandidates(source);
-  if (count(source, uiMarker) !== 1 || count(source, 'label:"Auto Router"') !== 1 || count(source, "autoRouter") < 2 || count(source, "availableCombos:") !== 2 || cards.length !== 1) fail(`Patched UI integrity failed:\n  ${path.relative(appRoot, target)}`);
+function functionDeclarations(ast) { const found = []; walkAst(ast, null, (node) => { if (node.type === "FunctionDeclaration") found.push(node); }); return found; }
+function literals(node) { const values = new Set(); walkAst(node, null, (entry) => { if (entry.type === "Literal") values.add(entry.value); }); return values; }
+function hasLiterals(fn, values) { const found = literals(fn.body); return values.every((value) => found.has(value)); }
+function variableDeclarators(fn) { const found = []; walkAst(fn.body, null, (node, parent) => { if (node.type === "VariableDeclarator") found.push({ node, parent }); }); return found; }
+function functionParam(fn, name) {
+  const item = fn.params[0]?.properties?.find((entry) => keyName(entry) === name);
+  return identifier(item?.value) || identifier(item?.value?.left);
 }
-function replaceRanges(source, replacements) {
-  const sorted = [...replacements].sort((left, right) => right.start - left.start);
-  for (let index = 1; index < sorted.length; index += 1) if (sorted[index - 1].start < sorted[index].end) throw new Error("overlapping patch ranges");
-  for (const { start, end, text } of sorted) source = `${source.slice(0, start)}${text}${source.slice(end)}`;
+function memberObject(node) { const current = unchain(node); if (current?.type === "LogicalExpression") return memberObject(current.left); if (current?.type === "MemberExpression") return identifier(current.object); return null; }
+function memberProperty(node) { return unchain(node)?.type === "MemberExpression" ? unchain(node).property?.name : null; }
+function stateBinding(fn, propertyName, target) {
+  const candidate = one(variableDeclarators(fn).filter(({ node }) => {
+    const init = node.init;
+    const first = unchain(init?.arguments?.[0]);
+    return node.id?.type === "ArrayPattern" && init?.type === "CallExpression" && init.callee?.type === "SequenceExpression" && init.callee.expressions.at(-1)?.property?.name === "useState" && first?.type === "LogicalExpression" && memberProperty(first.left) === propertyName;
+  }), `${propertyName} state`, target);
+  return { value: identifier(candidate.node.id.elements[0]), setter: identifier(candidate.node.id.elements[1]), react: identifier(candidate.node.init.callee.expressions.at(-1).object) };
+}
+function validateRanges(replacements, target) {
+  const ordered = [...replacements].sort((left, right) => left.start - right.start);
+  for (let index = 1; index < ordered.length; index += 1) if (ordered[index - 1].end > ordered[index].start) fail(`Auto Router UI replacements overlap:\n  ${path.relative(appRoot, target)}`);
+}
+function replaceRanges(source, replacements, target) {
+  validateRanges(replacements, target);
+  for (const replacement of [...replacements].sort((left, right) => right.start - left.start)) source = `${source.slice(0, replacement.start)}${replacement.text}${source.slice(replacement.end)}`;
   return source;
 }
-function uniqueMatch(source, expression, name, target) {
-  const matches = [...source.matchAll(expression)];
-  if (matches.length !== 1) fail(`Auto Router UI semantic anchor is not unique (${name}):\n  ${path.relative(appRoot, target)}\n\nExpected exactly 1; found ${matches.length}.`);
-  return matches[0];
+function controls(jsx, select, options, name, combo) {
+  const target = (label, key) => `(0,${jsx}.jsxs)("label",{className:"grid gap-1",children:["${label}",(0,${jsx}.jsxs)("select",{className:"py-1.5 text-xs",value:_arConfig.${key}||"",onChange:event=>_arUpdate("${key}",event.target.value),children:[(0,${jsx}.jsx)("option",{value:"",children:"Select combo"}),...(_arConfig.${key}&&!_arAvailableCombos.some(entry=>entry.name===_arConfig.${key}&&entry.id!==${combo}.id&&entry.strategy.fallbackStrategy!=="auto")?[(0,${jsx}.jsx)("option",{value:_arConfig.${key},disabled:!0,children:_arConfig.${key}+" (missing or Auto Router — unsupported target)"},_arConfig.${key})]:[]),..._arAvailableCombos.filter(entry=>entry.id!==${combo}.id&&entry.strategy.fallbackStrategy!=="auto").map(entry=>(0,${jsx}.jsx)("option",{value:entry.name,children:entry.name},entry.name))]})]})`;
+  const input = (label, state, setter, key, fallback, hint = "") => `(0,${jsx}.jsxs)("label",{className:"grid gap-1",children:["${label}${hint}",(0,${jsx}.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:${state},onChange:event=>${setter}(event.target.value),onBlur:event=>{const value=Number(event.target.value);if(Number.isSafeInteger(value)&&value>0)_arUpdate("${key}",value);else ${setter}(String(_arConfig.${key}||${fallback}))}})]})`;
+  return `(0,${jsx}.jsxs)("div",{className:"grid gap-2",children:[(0,${jsx}.jsxs)("label",{className:"grid gap-1",children:["Strategy",(0,${jsx}.jsx)(${select},{options:${options},value:_arStrategy,onChange:event=>_arSetStrategy(event.target.value),selectClassName:"py-1.5 text-xs"})]}),"auto"===_arStrategy&&(0,${jsx}.jsxs)("div",{className:"grid gap-2 text-xs",children:[(0,${jsx}.jsx)("p",{className:"font-medium text-text-main",children:"Auto Router Settings"}),${target("Easy target", "easyTarget")},${target("Hard target", "hardTarget")},(0,${jsx}.jsxs)("details",{className:"rounded border border-black/5 p-2 dark:border-white/10",children:[(0,${jsx}.jsx)("summary",{className:"cursor-pointer font-medium",children:"Advanced"}),(0,${jsx}.jsxs)("div",{className:"mt-2 grid gap-2",children:[${input("Hard threshold", "_arHard", "_arSetHard", "hardThreshold", 6, " (default 6; recommended 4–10)")},${input("Long context threshold (characters)", "_arContext", "_arSetContext", "longContextChars", 24000, " (default 24000)")},${input("Large tool-result threshold (characters)", "_arToolResult", "_arSetToolResult", "largeToolResultChars", 12000, " (default 12000)")},${input("Many-tools threshold", "_arTools", "_arSetTools", "manyTools", 16, " (default 16)")},(0,${jsx}.jsxs)("label",{className:"flex items-center gap-2",children:[(0,${jsx}.jsx)("input",{type:"checkbox",checked:!!_arConfig.verbose,onChange:event=>_arUpdate("verbose",event.target.checked)}),"Verbose logging"]})]})]})]})]})`;
 }
-function escapePattern(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
-function uiPatchSpec(source, target) {
-  const selector = uniqueMatch(source, /\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*),\{options:([A-Za-z_$][\w$]*),value:([A-Za-z_$][\w$]*),onChange:([A-Za-z_$][\w$]*)=>([A-Za-z_$][\w$]*)\(\{fallbackStrategy:\5\.target\.value\}\),selectClassName:"py-1\.5 text-xs"\}\)/g, "strategy selector", target);
-  const [selectorText, jsx, , , level, , update] = selector;
-  const state = uniqueMatch(source, new RegExp(`(?:let|const)[^;]*?,${escapePattern(level)}=([A-Za-z_$][\\w$]*)\\.fallbackStrategy\\|\\|"fallback",[A-Za-z_$][\\w$]*=\\1\\.judgeModel\\|\\|""(?:,[^;]*)?;`, "g"), "strategy state", target);
-  const strategy = state[1];
-  const react = uniqueMatch(state[0], /\(0,([A-Za-z_$][\w$]*)\.useState\)\(/g, "React state hook", target)[1];
-  const propCandidates = [...source.matchAll(/function\s+[A-Za-z_$][\w$]*\(\{([\s\S]*?)\}\)\{/g)].filter((match) => {
-    const props = match[1];
-    return new RegExp(`(?:^|,)combo:([A-Za-z_$][\\w$]*)(?:,|$)`).test(props)
-      && new RegExp(`(?:^|,)strategy:${escapePattern(strategy)}=\\{\\}(?:,|$)`).test(props)
-      && new RegExp(`(?:^|,)onSetStrategy:${escapePattern(update)}(?:,|$)`).test(props);
+function discoverUiStructure(source, target) {
+  const ast = parseJavaScript(source, target), functions = functionDeclarations(ast);
+  const options = one([...source.matchAll(/(?:let|const)\s+([A-Za-z_$][\w$]*)=\[[^;]*?"fusion",label:"Fusion — panel \+ judge"[^;]*?\];/g)], "strategy options", target);
+  const optionName = options[1];
+  const cardCandidates = functions.filter((fn) => hasLiterals(fn, ["Edit"]) && functionParam(fn, "combo") && functionParam(fn, "strategy") && functionParam(fn, "onSetStrategy"));
+  const card = one(cardCandidates, "ComboCard component", target);
+  const selector = one((() => { const calls = []; walkAst(card.body, null, (node) => { if (jsxCall(node) && objectProperty(node.arguments[1], "options")?.value?.name === optionName && objectProperty(node.arguments[1], "onChange")) calls.push(node); }); return calls; })(), "ComboCard strategy selector", target);
+  const jsx = identifier(selector.callee.expressions[1].object), select = source.slice(selector.arguments[0].start, selector.arguments[0].end);
+  const cardStrategyDeclarator = one([...variableDeclarators(card)].filter(({ node }) => unchain(node.init)?.type === "LogicalExpression" && memberProperty(unchain(node.init).left) === "fallbackStrategy"), "ComboCard strategy state", target);
+  const cardStrategy = identifier(cardStrategyDeclarator.node.id);
+  const modal = one(functions.filter((fn) => hasLiterals(fn, ["Edit Combo", "Combo Name", "Models", "Add Model", "Cancel", "Save"])), "Edit Combo component", target);
+  const modalSave = functionParam(modal, "onSave"), modalCombo = functionParam(modal, "combo"), modalKind = functionParam(modal, "kindFilter");
+  if (!modalSave || !modalCombo || !modalKind) fail(`Auto Router UI Edit Combo component data flow is incompatible:\n  ${path.relative(appRoot, target)}`);
+  const name = stateBinding(modal, "name", target), models = stateBinding(modal, "models", target);
+  const modalStateStatement = one(modal.body.body.filter((statement) => statement.type === "VariableDeclaration" && statement.declarations.some((declaration) => declaration.id?.type === "ArrayPattern" && declaration.init?.arguments?.[0]?.type === "ObjectExpression")), "Edit Combo state declaration", target);
+  const saveDeclarator = one(variableDeclarators(modal).filter(({ node }) => node.init?.type === "ArrowFunctionExpression" && source.slice(node.init.start, node.init.end).includes(`await ${modalSave}({name:${name.value}.trim(),models:${models.value}})`)), "Edit Combo Save handler", target);
+  // Derive the name validator and the "saving" flag setter from the upstream Save callback
+  // itself so generated code keeps upstream validation and duplicate-submission protection.
+  let validator = null, savingSetter = null;
+  walkAst(saveDeclarator.node.init, null, (node, parent) => {
+    if (node.type !== "CallExpression" || node.callee?.type !== "Identifier") return;
+    const argument = node.arguments?.[0];
+    if (argument?.type === "Identifier" && argument.name === name.value && parent?.type === "LogicalExpression") validator = node.callee.name;
+    if (argument?.type === "UnaryExpression" && argument.operator === "!") savingSetter = node.callee.name;
   });
-  if (propCandidates.length !== 1) fail(`Auto Router UI semantic component is ambiguous:\n  ${path.relative(appRoot, target)}\n\nExpected exactly 1 component connected to the selector's strategy/update data flow; found ${propCandidates.length}.`);
-  const props = propCandidates[0][1];
-  const combo = new RegExp(`(?:^|,)combo:([A-Za-z_$][\\w$]*)(?:,|$)`).exec(props)?.[1];
-  if (!combo) fail(`Auto Router UI component is missing its combo binding:\n  ${path.relative(appRoot, target)}`);
-  const componentName = /^function\s+([A-Za-z_$][\w$]*)/.exec(propCandidates[0][0])?.[1];
-  if (!componentName) fail(`Auto Router UI component binding is missing:\n  ${path.relative(appRoot, target)}`);
-  const identifier = String.raw`[A-Za-z_$][\w$]*`;
-  const cardCall = uniqueMatch(source, new RegExp(`(${identifier})\\.map\\((${identifier})=>\\(0,${jsx}\\.jsx\\)\\(${componentName},\\{combo:\\2,[^}]*?(strategy:(${identifier})\\[\\2\\.name\\]\\|\\|\\{\\},onSetStrategy:(${identifier})=>${identifier}\\(\\2\\.name,\\5\\))`, "g"), "combo collection card render", target);
-  const [, comboCollection, comboEntry, callText, collectionStrategies, callEvent] = cardCall;
-  const callbackHeader = `${comboCollection}.map(${comboEntry}=>`;
-  const callbackStart = cardCall.index;
-  if (source.slice(callbackStart, callbackStart + callbackHeader.length) !== callbackHeader) fail(`Auto Router UI callback header association is ambiguous:\n  ${path.relative(appRoot, target)}`);
-  const componentMatch = propCandidates[0];
-  const componentOpen = componentMatch.index + componentMatch[0].lastIndexOf("{");
-  const componentClose = delimiterPairs(source)?.find((pair) => pair.open === componentOpen)?.close;
-  const callOffset = cardCall[0].indexOf(callText);
-  if (componentClose === undefined || callOffset < 0) fail(`Auto Router UI combo collection association is ambiguous:\n  ${path.relative(appRoot, target)}`);
-  const componentText = source.slice(componentMatch.index, componentClose + 1);
-  const card = uniqueMatch(source, new RegExp(`"fusion"===${escapePattern(level)}&&`, "g"), "fusion card", target);
-  for (const match of [selector, state, card]) if (match.index < componentMatch.index || match.index + match[0].length > componentClose + 1) fail(`Auto Router UI component transformation is not structurally contained:\n  ${path.relative(appRoot, target)}`);
-  const collectionMode = comboCollection === comboEntry ? "callbackSource" : "direct";
-  if (["_arConfig", "_arUpdate", "_arCombos", "_arHard", "_arComboIndex", "_arComboCollection"].some((name) => source.includes(name))) fail(`Auto Router UI generated binding collision:\n  ${path.relative(appRoot, target)}`);
-  return { selectorText, jsx, level, update, stateText: state[0], strategy, react, componentText, componentStart: componentMatch.index, selectorStart: selector.index - componentMatch.index, stateStart: state.index - componentMatch.index, combo, comboCollection, collectionMode, callbackEntry: comboEntry, callbackHeader, callbackStart, callText, callStart: cardCall.index + callOffset, collectionStrategies, callEvent, cardText: card[0], cardStart: card.index - componentMatch.index };
+  if (!validator || !savingSetter) fail(`Auto Router UI Edit Combo validation data flow is incompatible:\n  ${path.relative(appRoot, target)}`);
+  const footer = one((() => { const calls = []; walkAst(modal.body, null, (node) => { if (node.type === "CallExpression" && objectProperty(node.arguments[1], "className")?.value?.value === "flex flex-col gap-2 pt-1 sm:flex-row") calls.push(node); }); return calls; })(), "Edit Combo footer", target);
+  const parent = one(functions.filter((fn) => fn !== card && fn !== modal && [...literals(fn)].some((value) => typeof value === "string" && value.startsWith("Group models under one name"))), "combo collection component", target);
+  const invocation = one((() => { const calls = []; walkAst(parent.body, null, (node) => { if (jsxCall(node) && identifier(node.arguments[0]) === modal.id.name && objectProperty(node.arguments[1], "combo")) calls.push(node); }); return calls; })(), "Edit Combo invocation", target);
+  const invocationProps = invocation.arguments[1], edited = objectProperty(invocationProps, "combo")?.value?.name, onSave = objectProperty(invocationProps, "onSave")?.value;
+  if (!edited || onSave?.type !== "ArrowFunctionExpression" || onSave.body?.type !== "CallExpression") fail(`Auto Router UI Edit Combo invocation data flow is incompatible:\n  ${path.relative(appRoot, target)}`);
+  const update = identifier(onSave.body.callee);
+  const updateDeclarator = one(variableDeclarators(parent).filter(({ node }) => node.id?.name === update && node.init?.type === "ArrowFunctionExpression" && source.slice(node.init.start, node.init.end).includes("/api/combos/")), "combo Save handler", target);
+  const refresh = one([...source.slice(updateDeclarator.node.init.start, updateDeclarator.node.init.end).matchAll(/await ([A-Za-z_$][\w$]*)\(\),[A-Za-z_$][\w$]*\(null\)/g)], "combo Save close path", target)[1];
+  const close = source.slice(invocation.start, invocation.end).match(/onClose:\(\)=>([A-Za-z_$][\w$]*)\(null\)/)?.[1];
+  const cardInvocation = one((() => { const calls = []; walkAst(parent.body, null, (node) => { if (jsxCall(node) && identifier(node.arguments[0]) === card.id.name && objectProperty(node.arguments[1], "strategy")) calls.push(node); }); return calls; })(), "ComboCard invocation", target);
+  const strategies = memberObject(objectProperty(cardInvocation.arguments[1], "strategy")?.value);
+  let map = null; walkAst(parent.body, null, (node) => { if (node.type === "CallExpression" && node.callee?.type === "MemberExpression" && node.callee.property?.name === "map" && node.arguments.some((argument) => argument.start <= cardInvocation.start && argument.end >= cardInvocation.end)) map = node; });
+  const combos = identifier(map?.callee?.object);
+  const explanation = one((() => { const nodes = []; walkAst(parent.body, null, (node) => { if (node.type === "CallExpression" && jsxCall(node) && literal(node.arguments[0], "ul") && node.arguments[1]?.properties?.some((item) => keyName(item) === "children" && item.value?.type === "ArrayExpression" && item.value.elements.some((element) => element && [...literals(element)].some((value) => value === "Fusion")))) nodes.push(node); }); return nodes; })(), "strategy explanation list", target);
+  const explanationItems = objectProperty(explanation.arguments[1], "children").value;
+  const explanationItem = one(explanationItems.elements.filter((element) => element && [...literals(element)].includes("Fusion")), "Fusion explanation item", target);
+  if (!strategies || !combos || !close) fail(`Auto Router UI parent settings data flow is incompatible:\n  ${path.relative(appRoot, target)}`);
+  if (["_arInitialStrategy", "_arAvailableCombos", "_arSave"].some((binding) => source.includes(binding))) fail(`Auto Router UI generated binding collision:\n  ${path.relative(appRoot, target)}`);
+  return { options, optionName, card, cardStrategy, selector, jsx, select, modal, modalSave, modalCombo, name, models, validator, savingSetter, modalStateStatement, saveDeclarator, footer, parent, invocation, edited, onSave, update, updateDeclarator, refresh, close, strategies, combos, explanation, explanationItem };
 }
-function controls(spec) {
-  const input = (label, state, setter, key, fallback, hint = "") => `(0,${spec.jsx}.jsxs)("label",{className:"grid gap-1",children:["${label}${hint}",(0,${spec.jsx}.jsx)("input",{className:"py-1 text-xs",type:"number",min:1,value:${state},onChange:event=>${setter}(event.target.value),onBlur:event=>{const value=Number(event.target.value);if(Number.isSafeInteger(value)&&value>0)_arUpdate("${key}",value);else ${setter}(String(_arConfig.${key}||${fallback}))}})]})`;
-  const target = (label, key) => `(0,${spec.jsx}.jsxs)("label",{className:"grid gap-1",children:["${label}",(0,${spec.jsx}.jsxs)("select",{className:"py-1.5 text-xs",value:_arConfig.${key}||"",onChange:event=>_arUpdate("${key}",event.target.value),children:[(0,${spec.jsx}.jsx)("option",{value:"",children:"Select combo"}),...(_arConfig.${key}&&!_arCombos.some(entry=>entry.name===_arConfig.${key}&&entry.strategy.fallbackStrategy!=="auto")?[(0,${spec.jsx}.jsx)("option",{value:_arConfig.${key},disabled:!0,children:_arConfig.${key}+" (missing or Auto Router — unsupported target)"},_arConfig.${key})]:[]),..._arCombos.filter(entry=>entry.name!==${spec.combo}.name&&entry.strategy.fallbackStrategy!=="auto").map(entry=>(0,${spec.jsx}.jsx)("option",{value:entry.name,children:entry.name},entry.name))]})]})`;
-  return `(0,${spec.jsx}.jsxs)("div",{className:"mt-2 grid gap-2 text-xs",children:[${target("Easy target", "easyTarget")},${target("Hard target", "hardTarget")},(0,${spec.jsx}.jsxs)("details",{className:"rounded border border-black/5 p-2 dark:border-white/10",children:[(0,${spec.jsx}.jsx)("summary",{className:"cursor-pointer font-medium",children:"Advanced"}),(0,${spec.jsx}.jsxs)("div",{className:"mt-2 grid gap-2",children:[${input("Hard threshold", "_arHard", "_arSetHard", "hardThreshold", 6, " (default 6; recommended 4–10)")},${input("Long context threshold (characters)", "_arContext", "_arSetContext", "longContextChars", 24000, " (default 24000)")},${input("Large tool-result threshold (characters)", "_arToolResult", "_arSetToolResult", "largeToolResultChars", 12000, " (default 12000)")},${input("Many-tools threshold", "_arTools", "_arSetTools", "manyTools", 16, " (default 16)")},(0,${spec.jsx}.jsxs)("label",{className:"flex items-center gap-2",children:[(0,${spec.jsx}.jsx)("input",{type:"checkbox",checked:!!_arConfig.verbose,onChange:event=>_arUpdate("verbose",event.target.checked)}),"Verbose logging"]})]})]})]})`;
+function verifyPatchedUi(target, source = fs.readFileSync(target, "utf8")) {
+  const ast = parseJavaScript(source, target), functions = functionDeclarations(ast);
+  if (count(source, uiMarker) !== 1 || count(source, 'label:"Auto Router"') !== 1 || !source.includes("onSave:_arSave")) fail(`Patched UI integrity failed:\n  ${path.relative(appRoot, target)}`);
+  const modal = one(functions.filter((fn) => hasLiterals(fn, ["Edit Combo", "Models", "Add Model", "Cancel", "Save"])), "patched Edit Combo component", target);
+  if (!hasLiterals(modal, ["Auto Router Settings", "Easy target", "Hard target", "Strategy"])) fail(`Patched UI settings are not contained by Edit Combo:\n  ${path.relative(appRoot, target)}`);
+  if (!functionParam(modal, "strategy") || !functionParam(modal, "availableCombos")) fail(`Patched Edit Combo data flow is incompatible:\n  ${path.relative(appRoot, target)}`);
+  const card = functions.filter((fn) => functionParam(fn, "combo") && functionParam(fn, "onSetStrategy"));
+  if (card.some((fn) => hasLiterals(fn, ["Auto Router Settings", "Easy target"]))) fail(`Patched UI Auto Router controls leaked into the combo card:\n  ${path.relative(appRoot, target)}`);
+}
+
+function applyUiPlan(source, plan, target) {
+  const modalParams = source.slice(plan.modal.params[0].start, plan.modal.params[0].end);
+  const expandedParams = `${modalParams.slice(0, -1)},strategy:_arInitialStrategy={},availableCombos:_arAvailableCombos=[]}`;
+  const state = `const _arInitialConfig=_arInitialStrategy.autoRouter&&typeof _arInitialStrategy.autoRouter==="object"?_arInitialStrategy.autoRouter:{},[_arStrategy,_arSetStrategy]=(0,${plan.name.react}.useState)(_arInitialStrategy.fallbackStrategy||"fallback"),[_arConfig,_arSetConfig]=(0,${plan.name.react}.useState)(_arInitialConfig),_arUpdate=(key,value)=>_arSetConfig(config=>({...config,[key]:value})),[_arHard,_arSetHard]=(0,${plan.name.react}.useState)(String(_arInitialConfig.hardThreshold||6)),[_arContext,_arSetContext]=(0,${plan.name.react}.useState)(String(_arInitialConfig.longContextChars||24000)),[_arToolResult,_arSetToolResult]=(0,${plan.name.react}.useState)(String(_arInitialConfig.largeToolResultChars||12000)),[_arTools,_arSetTools]=(0,${plan.name.react}.useState)(String(_arInitialConfig.manyTools||16));`;
+  const save = `async()=>{if(!${plan.validator}(${plan.name.value}))return;${plan.savingSetter}(!0);try{await ${plan.modalSave}({name:${plan.name.value}.trim(),models:${plan.models.value}},"auto"===_arStrategy?{fallbackStrategy:"auto",autoRouter:_arConfig}:{fallbackStrategy:_arStrategy})}finally{${plan.savingSetter}(!1)}}`;
+  const invocation = source.slice(plan.invocation.start, plan.invocation.end);
+  const invocationExpanded = invocation.replace(`onSave:${source.slice(plan.onSave.start, plan.onSave.end)}`, `onSave:_arSave,strategy:${plan.strategies}[${plan.edited}.name]||{},availableCombos:${plan.combos}.map(entry=>({id:entry.id,name:entry.name,strategy:${plan.strategies}[entry.name]||{}}))`);
+  const update = `async(id,comboData)=>{try{let response=await fetch(\`/api/combos/${"${id}"}\`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(comboData)});if(response.ok)return await ${plan.refresh}(),!0;let error=await response.json();alert(error.error||"Failed to update combo");return!1}catch(error){console.log("Error updating combo:",error);return!1}}`;
+  const wrapper = `const _arSave=async(comboData,strategy)=>{let saved=await ${plan.update}(${plan.edited}.id,comboData);if(!saved)return;try{let response=await fetch("/api/settings");if(!response.ok)throw Error("Failed to load combo strategies");let settings=await response.json(),configs={...(settings.comboStrategies||{})},oldName=${plan.edited}.name,newName=comboData.name;if(oldName!==newName){let old=configs[oldName];delete configs[oldName];if(old)configs[newName]=old}let next={...configs[newName]||{},...strategy};next.fallbackStrategy&&"fallback"!==next.fallbackStrategy?configs[newName]=next:delete configs[newName];let persisted=await fetch("/api/settings",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({comboStrategies:configs})});if(!persisted.ok){let error=await persisted.json().catch(()=>({}));alert(error.error||"Failed to save combo strategy");return}await ${plan.refresh}(),${plan.close}(null)}catch(error){console.log("Error updating combo strategy:",error),alert("Failed to save combo strategy")}};`;
+  const insertControls = `${plan.modalCombo}&&(0,${plan.jsx}.jsxs)("div",{children:[${controls(plan.jsx, plan.select, plan.optionName, plan.name.value, plan.modalCombo)}]}),`;
+  const optionAt = plan.options.index + plan.options[0].indexOf(UI_ANCHOR);
+  const replacements = [
+    { start: optionAt, end: optionAt + UI_ANCHOR.length, text: `${UI_PATCH}/* ${uiMarker} */` },
+    { start: plan.selector.start, end: plan.selector.end, text: `(0,${plan.jsx}.jsx)("span",{className:"text-xs text-text-muted",children:(${plan.optionName}.find(option=>option.value===${plan.cardStrategy})||{}).label||${plan.cardStrategy}})` },
+    { start: plan.modal.params[0].start, end: plan.modal.params[0].end, text: expandedParams },
+    { start: plan.modalStateStatement.end, end: plan.modalStateStatement.end, text: state },
+    { start: plan.saveDeclarator.node.init.start, end: plan.saveDeclarator.node.init.end, text: save },
+    { start: plan.footer.start, end: plan.footer.start, text: insertControls },
+    { start: plan.invocation.start, end: plan.invocation.end, text: invocationExpanded },
+    { start: plan.updateDeclarator.node.init.start, end: plan.updateDeclarator.node.init.end, text: update },
+    { start: plan.parent.body.start + 1, end: plan.parent.body.start + 1, text: wrapper },
+    { start: plan.explanationItem.end, end: plan.explanationItem.end, text: `,(0,${plan.jsx}.jsxs)("li",{children:[(0,${plan.jsx}.jsx)("span",{className:"font-medium text-text-main",children:"Auto Router"})," — automatically routes each request to an Easy or Hard target combo based on task complexity"]})` },
+  ];
+  const patched = replaceRanges(source, replacements, target);
+  parseJavaScript(patched, target);
+  return patched;
 }
 function patchUi(targets) {
   let changed = false;
   for (const target of targets) {
-    let source = fs.readFileSync(target, "utf8");
-    if (source.includes(uiMarker)) {
-      verifyPatchedUi(target, source);
-      continue;
-    }
-    if (count(source, UI_ANCHOR) !== 1) fail(`UI strategy anchor is not unique:\n  ${path.relative(appRoot, target)}`);
-    const spec = uiPatchSpec(source, target);
-    const collectionReference = spec.collectionMode === "callbackSource" ? "_arComboCollection" : spec.comboCollection;
-    const callPatched = `availableCombos:${collectionReference}.map(${spec.callEvent}=>({name:${spec.callEvent}.name,strategy:${spec.collectionStrategies}[${spec.callEvent}.name]||{}})),${spec.callText}`;
-    const statePatched = `${spec.stateText}const _arConfig=${spec.strategy}.autoRouter&&typeof ${spec.strategy}.autoRouter==="object"?${spec.strategy}.autoRouter:{},_arUpdate=(key,value)=>${spec.update}({autoRouter:{..._arConfig,[key]:value}}),[_arHard,_arSetHard]=(0,${spec.react}.useState)(String(_arConfig.hardThreshold||6)),[_arContext,_arSetContext]=(0,${spec.react}.useState)(String(_arConfig.longContextChars||24000)),[_arToolResult,_arSetToolResult]=(0,${spec.react}.useState)(String(_arConfig.largeToolResultChars||12000)),[_arTools,_arSetTools]=(0,${spec.react}.useState)(String(_arConfig.manyTools||16));(0,${spec.react}.useEffect)(()=>{_arSetHard(String(_arConfig.hardThreshold||6));_arSetContext(String(_arConfig.longContextChars||24000));_arSetToolResult(String(_arConfig.largeToolResultChars||12000));_arSetTools(String(_arConfig.manyTools||16));},[_arConfig.hardThreshold,_arConfig.longContextChars,_arConfig.largeToolResultChars,_arConfig.manyTools]);`;
-    const rendered = `(0,${spec.jsx}.jsxs)("div",{children:[${spec.selectorText},"auto"===${spec.level}&&${controls(spec)}]})`;
-    let componentPatched = replaceRanges(spec.componentText, [
-      { start: spec.selectorStart, end: spec.selectorStart + spec.selectorText.length, text: rendered },
-      { start: spec.stateStart, end: spec.stateStart + spec.stateText.length, text: statePatched },
-      { start: spec.cardStart, end: spec.cardStart + spec.cardText.length, text: `"auto"===${spec.level}&&(0,${spec.jsx}.jsx)("div",{className:"mt-2 text-[11px] text-text-muted",children:"Auto Router"}),${spec.cardText}` },
-    ]);
-    componentPatched = componentPatched.replace(`onSetStrategy:${spec.update}`, `onSetStrategy:${spec.update},availableCombos:_arCombos=[]`);
-    if (componentPatched === spec.componentText) fail(`Auto Router UI component props could not be extended:\n  ${path.relative(appRoot, target)}`);
-    const anchorStart = source.indexOf(UI_ANCHOR);
-    source = replaceRanges(source, [
-      { start: spec.componentStart, end: spec.componentStart + spec.componentText.length, text: componentPatched },
-      { start: spec.callStart, end: spec.callStart + spec.callText.length, text: callPatched },
-      ...(spec.collectionMode === "callbackSource" ? [{ start: spec.callbackStart, end: spec.callbackStart + spec.callbackHeader.length, text: `${spec.comboCollection}.map((${spec.callbackEntry},_arComboIndex,_arComboCollection)=>` }] : []),
-      { start: anchorStart, end: anchorStart + UI_ANCHOR.length, text: `${UI_PATCH}/* ${uiMarker} */` },
-    ]);
-    verifyPatchedUi(target, source);
-    fs.writeFileSync(target, source);
+    const source = fs.readFileSync(target, "utf8");
+    if (source.includes(uiMarker)) { verifyPatchedUi(target, source); continue; }
+    const plan = discoverUiStructure(source, target);
+    const patched = applyUiPlan(source, plan, target);
+    verifyPatchedUi(target, patched);
+    fs.writeFileSync(target, patched);
     changed = true;
   }
   return changed;
 }
-
 
 const runtime = discoverRuntimeCandidate();
 const ui = discoverUiCandidates();
@@ -344,7 +376,7 @@ if (checkOnly) {
   for (const target of ui) {
     const source = fs.readFileSync(target, "utf8");
     if (source.includes(uiMarker)) verifyPatchedUi(target, source);
-    else uiPatchSpec(source, target);
+    else discoverUiStructure(source, target);
   }
   console.log(`9Router Auto Router compatibility check passed: runtime=${path.relative(appRoot, runtime)} ui=${ui.map((file) => path.relative(appRoot, file)).join(",")}`);
 } else {
