@@ -76,6 +76,9 @@ test("rollback browser regression attaches stdin, verifies execution markers, an
   assert.match(rollback, /Browser test did not start/);
   assert.match(rollback, /Browser test did not complete/);
   assert.match(rollback, /page\.on\("pageerror"/);
+  assert.match(rollback, /page\.waitForResponse\(response => response\.url\(\)\.includes\("\/api\/settings"\) && response\.request\(\)\.method\(\) === "PATCH" && response\.ok\(\)\)/);
+  assert.match(rollback, /page\.waitForFunction\(async \(\) =>/);
+  assert.doesNotMatch(rollback, /waitForTimeout\(250\)/);
   assert.match(rollback, /getByLabel\("Easy target"\)\.selectOption\("coder"\)/);
   assert.match(rollback, /getByLabel\("Hard target"\)\.selectOption\("coder-high"\)/);
   assert.match(rollback, /browser_combos patched-before-auto true/);

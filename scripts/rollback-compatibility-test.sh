@@ -91,11 +91,23 @@ const phase = process.env.PHASE;
   }
   assertNoErrors();
   if (process.env.CONFIGURE === "true") {
+    const settingsPatch = () => page.waitForResponse(response => response.url().includes("/api/settings") && response.request().method() === "PATCH" && response.ok());
     const autoCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//select][1]");
+    let save = settingsPatch();
     await autoCard.locator("select").first().selectOption("auto");
+    await save;
+    save = settingsPatch();
     await page.getByLabel("Easy target").selectOption("coder");
+    await save;
+    save = settingsPatch();
     await page.getByLabel("Hard target").selectOption("coder-high");
-    await page.waitForTimeout(250);
+    await save;
+    await page.waitForFunction(async () => {
+      const response = await fetch("/api/settings");
+      if (!response.ok) return false;
+      const strategy = (await response.json()).comboStrategies?.["coder-auto"];
+      return strategy?.fallbackStrategy === "auto" && strategy.autoRouter?.easyTarget === "coder" && strategy.autoRouter?.hardTarget === "coder-high";
+    }, { timeout: 10_000 });
     assertNoErrors();
     await page.reload({ waitUntil: "networkidle" });
     if (await autoCard.locator("select").first().inputValue() !== "auto") throw new Error(`${phase} did not persist Auto Router selection`);
