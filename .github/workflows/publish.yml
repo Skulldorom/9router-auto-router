@@ -3,6 +3,10 @@ name: Validate and publish production image
 on:
   push:
     branches: [main]
+    # Badge state is generated output written by the release workflow itself. A
+    # badge-only push must never start another release cycle.
+    paths-ignore:
+      - ".github/badges/**"
   schedule:
     - cron: "17 */6 * * *"
   workflow_dispatch:
@@ -24,6 +28,8 @@ jobs:
     outputs:
       build: ${{ steps.decision.outputs.build }}
       upstream_digest: ${{ steps.upstream.outputs.digest }}
+      deployed_revision: ${{ steps.decision.outputs.deployed_revision }}
+      deployed_upstream: ${{ steps.decision.outputs.deployed_upstream }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,39 +49,85 @@ jobs:
           UPSTREAM_DIGEST: ${{ steps.upstream.outputs.digest }}
         run: |
           set -eu
+          deployed_revision=
+          deployed_upstream=
+          if docker pull "${IMAGE_NAME}:latest" >/dev/null 2>&1; then
+            deployed_revision=$(docker image inspect "${IMAGE_NAME}:latest" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+            deployed_upstream=$(docker image inspect "${IMAGE_NAME}:latest" --format '{{ index .Config.Labels "io.github.skulldorom.9router-auto-router.upstream.digest" }}')
+            printf 'deployed_revision=%s\ndeployed_upstream=%s\n' "$deployed_revision" "$deployed_upstream" >> "$GITHUB_OUTPUT"
+          fi
           if [ "$EVENT_NAME" != schedule ]; then
             echo 'build=true' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if docker pull "${IMAGE_NAME}:latest" >/dev/null 2>&1; then
-            current_revision=$(docker image inspect "${IMAGE_NAME}:latest" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
-            current_upstream=$(docker image inspect "${IMAGE_NAME}:latest" --format '{{ index .Config.Labels "io.github.skulldorom.9router-auto-router.upstream.digest" }}')
-            if [ "$current_revision" = "$GITHUB_SHA" ] && [ "$current_upstream" = "$UPSTREAM_DIGEST" ]; then
-              echo 'build=false' >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
+          if [ -n "$deployed_revision" ] && [ "$deployed_revision" = "$GITHUB_SHA" ] && [ "$deployed_upstream" = "$UPSTREAM_DIGEST" ]; then
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo 'build=true' >> "$GITHUB_OUTPUT"
 
-  validate:
+  version:
     needs: should-build
+    if: needs.should-build.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      auto_router_version: ${{ steps.resolve.outputs.version }}
+      release_affecting: ${{ steps.resolve.outputs.release_affecting }}
+      create_tag: ${{ steps.resolve.outputs.create_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - id: labels
+        name: Resolve the labels of the PR that introduced this revision
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          node scripts/resolve-release-labels.mjs "$GITHUB_SHA" > release-labels.json
+          cat release-labels.json
+      - id: resolve
+        name: Resolve the deterministic Auto Router version for this revision
+        run: |
+          set -eu
+          node scripts/release-version.mjs resolve \
+            --sha "$GITHUB_SHA" \
+            --labels-file release-labels.json \
+            --github-output "$GITHUB_OUTPUT"
+
+  validate:
+    needs: [should-build, version]
     if: needs.should-build.outputs.build == 'true'
     uses: ./.github/workflows/validate-image.yml
     with:
       upstream_digest: ${{ needs.should-build.outputs.upstream_digest }}
       image_tag: 9router-auto-router:validated
+      auto_router_version: ${{ needs.version.outputs.auto_router_version }}
       upload_image: true
 
   publish:
-    needs: validate
+    needs: [validate, version]
     runs-on: ubuntu-latest
     permissions:
       attestations: write
-      contents: read
+      contents: write
       id-token: write
       packages: write
+    env:
+      PUBLISH_REVISION: ${{ needs.validate.outputs.revision }}
+      PUBLISH_AUTO_ROUTER_VERSION: ${{ needs.validate.outputs.auto_router_version }}
+      PUBLISH_UPSTREAM_DIGEST: ${{ needs.validate.outputs.upstream_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: validated-image
@@ -140,6 +192,65 @@ jobs:
           subject-name: ${{ steps.publish.outputs.image }}
           subject-digest: ${{ steps.publish.outputs.digest }}
           push-to-registry: true
+      - name: Verify published image metadata
+        if: steps.current.outputs.publish == 'true'
+        env:
+          IMAGE: ${{ steps.publish.outputs.image }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          REVISION: ${{ needs.validate.outputs.revision }}
+          AUTO_ROUTER_VERSION: ${{ needs.validate.outputs.auto_router_version }}
+          UPSTREAM_VERSION: ${{ needs.validate.outputs.upstream_version }}
+          UPSTREAM_DIGEST: ${{ needs.validate.outputs.upstream_digest }}
+        run: |
+          set -eu
+          pulled="${IMAGE}@${DIGEST}"
+          docker pull "$pulled"
+          node ./scripts/verify-image-metadata.mjs "$pulled" "$REVISION" "$AUTO_ROUTER_VERSION" "$UPSTREAM_VERSION" "$UPSTREAM_DIGEST"
+      - name: Tag immutable Auto Router SemVer release
+        if: steps.current.outputs.publish == 'true'
+        env:
+          IMAGE: ${{ steps.publish.outputs.image }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          REVISION: ${{ needs.validate.outputs.revision }}
+          AUTO_ROUTER_VERSION: ${{ needs.validate.outputs.auto_router_version }}
+          CREATE_TAG: ${{ needs.version.outputs.create_tag }}
+        run: |
+          set -eu
+          [ -n "$DIGEST" ] || { echo "Missing published digest." >&2; exit 1; }
+          # The SemVer tag identifies the ORIGINAL immutable release image. If this
+          # version already exists it is never repointed, so a later upstream-only
+          # rebuild moves `latest` without mutating the historical release identity.
+          if docker buildx imagetools inspect "${IMAGE}:v${AUTO_ROUTER_VERSION}" >/dev/null 2>&1; then
+            echo "Auto Router v${AUTO_ROUTER_VERSION} already published; leaving its image tag immutable."
+          else
+            docker buildx imagetools create --tag "${IMAGE}:v${AUTO_ROUTER_VERSION}" "${IMAGE}@${DIGEST}"
+          fi
+          # A git tag is the durable source of truth that pins a source revision to an
+          # Auto Router version. Only the resolver may create it, and only when this
+          # revision introduced the version (never for scheduled/retried rebuilds).
+          [ "$CREATE_TAG" = "true" ] || exit 0
+          git config user.name "openhands"
+          git config user.email "openhands@all-hands.dev"
+          git fetch --tags origin
+          existing_tag_sha=$(git rev-parse --verify --quiet "refs/tags/v${AUTO_ROUTER_VERSION}^{commit}" || true)
+          if [ -n "$existing_tag_sha" ]; then
+            # A retry or a re-run must be a no-op, and a pre-existing tag must never be
+            # silently repointed at a different revision.
+            [ "$existing_tag_sha" = "$REVISION" ] || {
+              echo "Git tag v${AUTO_ROUTER_VERSION} already points at ${existing_tag_sha}, not ${REVISION}." >&2
+              exit 1
+            }
+            echo "Git tag v${AUTO_ROUTER_VERSION} already records ${REVISION}; nothing to do."
+            exit 0
+          fi
+          git tag -a "v${AUTO_ROUTER_VERSION}" "$REVISION" \
+            -m "Auto Router ${AUTO_ROUTER_VERSION}" \
+            -m "Source revision: ${REVISION}"
+          # The concurrency group serializes production runs, but a stale run that
+          # somehow reaches this point must fail rather than move someone else's tag.
+          git push origin "refs/tags/v${AUTO_ROUTER_VERSION}:refs/tags/v${AUTO_ROUTER_VERSION}"
+      # Promoted last, after the immutable image was verified and its SemVer release
+      # identity recorded, so `latest` never points at a partially finalized release.
       - name: Promote attested image to latest
         if: steps.current.outputs.publish == 'true'
         env:
@@ -147,12 +258,152 @@ jobs:
           DIGEST: ${{ steps.publish.outputs.digest }}
         run: |
           set -eu
-          [ -n "$DIGEST" ]
+          [ -n "$DIGEST" ] || { echo "Missing published digest." >&2; exit 1; }
           docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}@${DIGEST}"
-      - name: Make the package public when repository settings permit
-        if: steps.current.outputs.publish == 'true'
+
+  # Owns the known-good badge state. It runs only after the publish job has fully
+  # succeeded (immutable image published, attested, verified, tagged, and promoted to
+  # `latest`), so it can never record a version that was merely built. It reads the
+  # versions straight from the image that `latest` currently points at, which makes a
+  # retry of the same release idempotent: the values it writes are already the current
+  # ones and the job becomes a no-op.
+  #
+  # Unlike publication, this job writes to `main`, and it only runs long after the
+  # earlier source/upstream freshness checks, so a newer commit can land on `main` in
+  # between. It therefore re-verifies ownership of `main` immediately before it
+  # commits (see the badge-state guard step) and skips badge publication when a newer
+  # source revision already owns production state. It never rebases an older release's
+  # generated badge files onto newer source.
+  badge-state:
+    needs: [should-build, validate, publish]
+    # `always()` keeps this reachable when `publish` is skipped by the stale-run
+    # guard (a skipped need does not satisfy a plain success condition), while the
+    # explicit result check keeps it fail-closed: failed validation, failed
+    # attestation, or a skipped publish can never advance badge state.
+    if: always() && needs.should-build.outputs.build == 'true' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      # Check out the exact revision this run validated, not whatever `main` happens
+      # to be now, so generated badge state can only ever be committed on top of the
+      # source this workflow actually validated.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.revision }}
+          fetch-depth: 0
+      - name: Authenticate to GHCR to read the known-good image
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve the published known-good versions from the image itself
+        id: known-good
+        run: |
+          set -eu
+          docker pull "${IMAGE_NAME}:latest"
+          inspect=$(docker buildx imagetools inspect "${IMAGE_NAME}:latest")
+          auto_router_version=$(docker image inspect "${IMAGE_NAME}:latest" --format '{{ index .Config.Labels "io.github.skulldorom.9router-auto-router.version" }}')
+          upstream_version=$(docker image inspect "${IMAGE_NAME}:latest" --format '{{ index .Config.Labels "io.github.skulldorom.9router-auto-router.upstream.version" }}')
+          revision=$(docker image inspect "${IMAGE_NAME}:latest" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+          digest=$(printf '%s\n' "$inspect" | sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
+          test -n "$digest"
+          # A SemVer Auto Router version label only exists on an image this pipeline
+          # published and attested, so this refuses to publish a badge for an old
+          # pre-versioning image or a partially produced image. It also means a failed
+          # validation or attestation can never reach this point at all.
+          for value in "$auto_router_version" "$upstream_version"; do
+            printf '%s' "$value" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+              echo "Refusing to publish a badge for a non-release image (got '${value}')" >&2
+              exit 1
+            }
+          done
+          printf 'auto_router_version=%s\nupstream_version=%s\nrevision=%s\n' \
+            "$auto_router_version" "$upstream_version" "$revision" >> "$GITHUB_OUTPUT"
+      # Re-verify ownership of `main` before writing anything. Source freshness was
+      # checked before publication, but SemVer tagging and `latest` promotion happen in
+      # between, so `main` may have advanced since this run validated. A stale run must
+      # never modify `main`: it exits successfully so the newer production run records
+      # current badge state. Never rebase older badge files onto newer source.
+      #
+      # The guard compares the freshly fetched remote `main` tip with both the revision
+      # this run validated and the revision the known-good image records, as a
+      # read-only query.
+      - name: Verify this run still owns badge state on main
+        id: ownership
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Revision recorded by the known-good image itself.
+          KNOWN_GOOD_REVISION: ${{ steps.known-good.outputs.revision }}
+          # Revision this run validated and published for.
+          VALIDATED_REVISION: ${{ needs.validate.outputs.revision }}
+        run: |
+          set -eu
+          node scripts/badge-state-guard.mjs \
+            --validated-revision "$VALIDATED_REVISION" \
+            --known-good-revision "$KNOWN_GOOD_REVISION" \
+            --github-output "$GITHUB_OUTPUT"
+          if [ "$(grep -m1 '^skip=' "$GITHUB_OUTPUT" | cut -d= -f2)" = "true" ]; then
+            echo "Badge state skipped: this run no longer owns main." >&2
+          fi
+      - name: Update known-good version badge state
+        id: badge-commit
+        if: steps.ownership.outputs.skip != 'true'
+        env:
+          AUTO_ROUTER_VERSION: ${{ steps.known-good.outputs.auto_router_version }}
+          UPSTREAM_VERSION: ${{ steps.known-good.outputs.upstream_version }}
+          VALIDATED_REVISION: ${{ needs.validate.outputs.revision }}
+        run: |
+          set -eu
+          ./scripts/update-version-badges.sh "$AUTO_ROUTER_VERSION" "$UPSTREAM_VERSION" "$VALIDATED_REVISION"
+          git add .github/badges
+          if git diff --cached --quiet -- .github/badges; then
+            echo "Badge state already current."
+            echo 'commit=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "openhands"
+          git config user.email "openhands@all-hands.dev"
+          git commit -m "chore: record known-good versions auto-router v${AUTO_ROUTER_VERSION} / 9router v${UPSTREAM_VERSION}"
+          echo 'commit=true' >> "$GITHUB_OUTPUT"
+      # Even though the guard above re-checks ownership, a commit could still land in
+      # the small window between the guard and this push. Re-run the same tested guard
+      # here and skip rather than fail: a stale run must exit successfully so the newer
+      # production run records current badge state, and it must never modify `main`.
+      # `--force-with-lease` pins the expected remote tip as a final fail-closed
+      # backstop, so a non-fast-forward push can never move `main` or rewrite a newer
+      # commit.
+      - name: Publish badge state as a fast-forward of validated source
+        if: steps.badge-commit.outputs.commit == 'true'
+        env:
+          VALIDATED_REVISION: ${{ needs.validate.outputs.revision }}
+        run: |
+          set -eu
+          recheck="${RUNNER_TEMP}/badge-state-recheck.txt"
+          node scripts/badge-state-guard.mjs \
+            --validated-revision "$VALIDATED_REVISION" \
+            --known-good-revision "$VALIDATED_REVISION" \
+            --github-output "$recheck"
+          if grep -qx 'skip=true' "$recheck"; then
+            echo "Skipping badge state: origin/main no longer matches validated ${VALIDATED_REVISION}." >&2
+            echo "The newer production run owns current badge state." >&2
+            exit 0
+          fi
+          git push origin HEAD:main --force-with-lease=refs/heads/main:"$VALIDATED_REVISION"
+
+
+  promote-package-visibility:
+    needs: [should-build, publish]
+    if: needs.should-build.outputs.build == 'true' && needs.publish.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Make the package public when repository settings permit
         run: |
           set -eu
           owner_type=$(gh api repos/Skulldorom/9router-auto-router --jq .owner.type)
