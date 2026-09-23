@@ -161,10 +161,10 @@ test("strategy option discovery preserves future upstream options", () => {
 test("Edit Combo labels ordered models without a Strategy or target selector", () => {
   const dir = fixture(); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) { const modal = modalSection(fs.readFileSync(file, "utf8")); for (const label of ["Auto Router", "Easy", "Hard", "Ignored", "Advanced", "Hard threshold", "Long context threshold", "Large tool-result threshold", "Many-tools threshold", "Verbose logging"]) assert.ok(modal.includes(label)); for (const removed of ["\"Strategy\"", "Easy target", "Hard target", "availableCombos", "_arStrategyOptions"]) assert.ok(!modal.includes(removed), `modal retained ${removed}`); assert.match(modal, /0===index\?"Easy":1===index\?"Hard":"Ignored"/); assert.match(modal, /Models after position 2 are ignored by Auto Router/); assert.match(modal, /requires two distinct usable models in positions 1 \(Easy\) and 2 \(Hard\)/); }
 });
-test("saving an Auto Router combo stores advanced config but no duplicate targets", () => {
-  const dir = fixture(); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) { const patched = fs.readFileSync(file, "utf8"), modal = modalSection(patched); assert.match(modal, /let \{easyTarget:_arEasyTarget,hardTarget:_arHardTarget,\.\.\.config\}/); assert.match(modal, /"auto"===_arInitialStrategy\.fallbackStrategy\?\{autoRouter:config\}:null/); assert.match(patched, /normalizedModels=legacyTargets\?\[\.\.\.legacyTargets/); assert.match(patched, /let \{easyTarget:_arLegacyEasy,hardTarget:_arLegacyHard,\.\.\.base\}/); }
+test("legacy migration displays targets only when model order is absent and persists visible model edits", () => {
+  const dir = fixture(); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) { const patched = fs.readFileSync(file, "utf8"), modal = modalSection(patched); assert.match(modal, /_arStoredModels=.+?\?\.models\|\|\[\]/); assert.match(modal, /_arHasExplicitOrder=Array\.isArray\(_arStoredModels\)&&_arStoredModels\.length>0/); assert.match(modal, /_arEffectiveModels=_arLegacyTargets&&!_arHasExplicitOrder\?\[_arSavedConfig\.easyTarget\.trim\(\),_arSavedConfig\.hardTarget\.trim\(\)\]:null/); assert.match(modal, /Legacy targets remain effective until this model order is saved/); assert.match(modal, /_arEffectiveModels\|\|.+?\?\.models\|\|\[\]/); assert.match(modal, /let _arTargets=[A-Za-z_$][\w$]*\.slice\(0,2\)\.map/); assert.match(modal, /let \{easyTarget:_arEasyTarget,hardTarget:_arHardTarget,\.\.\.config\}/); assert.match(modal, /"auto"===_arInitialStrategy\.fallbackStrategy\?\{autoRouter:config\}:null/); assert.match(patched, /let changed=\{\.\.\.original,\.\.\.comboData,models:comboData\.models\}/); assert.doesNotMatch(patched, /normalizedModels=legacyTargets|legacyTargets\?\[\.\.\.legacyTargets/); assert.match(patched, /let \{easyTarget:_arLegacyEasy,hardTarget:_arLegacyHard,\.\.\.base\}/); }
 });
-test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v6/); assert.equal(source.split("9router-auto-router-ui:v6").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });
+test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v7/); assert.equal(source.split("9router-auto-router-ui:v7").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });
 
 // --- patcher robustness --------------------------------------------------------------------
 
@@ -223,7 +223,7 @@ test("patcher transforms fixtures containing awkward strings, comments and templ
   assert.equal(result.status, 0, result.stderr);
   const patched = fs.readFileSync(uiFiles(dir)[0], "utf8");
   parses(patched);
-  assert.match(patched, /9router-auto-router-ui:v6/);
+  assert.match(patched, /9router-auto-router-ui:v7/);
 });
 
 test("patcher does not depend on minified identifiers or chunk filenames", () => {

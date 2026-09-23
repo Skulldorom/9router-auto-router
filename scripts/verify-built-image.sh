@@ -7,7 +7,7 @@ EXPECTED_UPSTREAM_DIGEST=${3:-${EXPECTED_UPSTREAM_DIGEST:-}}
 EXPECTED_AUTO_ROUTER_VERSION=${4:-${EXPECTED_AUTO_ROUTER_VERSION:-}}
 EXPECTED_UPSTREAM_VERSION=${5:-${EXPECTED_UPSTREAM_VERSION:-}}
 MARKER=9router-auto-router:v3
-UI_MARKER=9router-auto-router-ui:v6
+UI_MARKER=9router-auto-router-ui:v7
 
 fail() {
   echo "Built image verification failed: $*" >&2
@@ -41,7 +41,7 @@ set -eu
 [ -f /opt/auto-router-config.cjs ]
 [ -f /opt/9router-auto-router/auto-router.cjs ]
 [ -f /opt/9router-auto-router/apply-patch.mjs ]
-UI_MARKER=9router-auto-router-ui:v6
+UI_MARKER=9router-auto-router-ui:v7
 runtime_files=$(grep -RFl "9router-auto-router:v3" /app/.next/server 2>/dev/null || true)
 [ "$(printf "%s\n" "$runtime_files" | sed "/^$/d" | wc -l)" -eq 1 ]
 runtime_file=$(printf "%s\n" "$runtime_files" | sed -n "/./{p;q;}")

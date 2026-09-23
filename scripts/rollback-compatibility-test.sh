@@ -101,8 +101,7 @@ const phase = process.env.PHASE;
     const comboResponse = await page.request.get(`${process.env.BASE_URL}/api/combos`);
     const autoCombo = (await comboResponse.json()).combos.find(combo => combo.name === "coder-auto");
     if (!autoCombo) throw new Error(`${phase} could not find coder-auto through the combos API`);
-    // Seed a deliberately conflicting legacy target order. Saving Edit Combo must preserve
-    // its effective routing by moving those legacy targets into positions 1 and 2.
+    // Preserve this explicit order; legacy targets remain active only until Save.
     let response = await page.request.put(`${process.env.BASE_URL}/api/combos/${autoCombo.id}`, { data: { ...autoCombo, models: ["coder-high", "coder", "coder-auto-model"] } });
     if (!response.ok()) throw new Error(`${phase} could not seed ordered model migration coverage`);
     response = await page.request.patch(`${process.env.BASE_URL}/api/settings`, { data: { comboStrategies: { "coder-auto": { fallbackStrategy: "auto", autoRouter: { easyTarget: "coder", hardTarget: "coder-high", hardThreshold: 7 } } } } });
@@ -126,7 +125,7 @@ const phase = process.env.PHASE;
     await modal.waitFor({ timeout: 10_000 });
     if (await modal.getByText("Strategy", { exact: true }).count()) throw new Error(`${phase} Edit Combo retained a Strategy selector`);
     for (const label of ["Easy", "Hard", "Ignored"]) if (await modal.getByText(label, { exact: true }).count() !== 1) throw new Error(`${phase} did not label ordered model target as ${label}`);
-    if (await modal.getByText("Legacy targets will be normalized to positions 1 and 2 when saved.", { exact: true }).count() !== 1) throw new Error(`${phase} did not warn about legacy target normalization`);
+    if (await modal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count() !== 1) throw new Error(`${phase} did not warn about legacy target normalization`);
     await modal.getByText("Advanced", { exact: true }).click();
     const hardThreshold = modal.getByLabel(/Hard threshold/);
     if (await hardThreshold.inputValue() !== "7") throw new Error(`${phase} did not preserve advanced settings while switching strategies`);
@@ -138,12 +137,12 @@ const phase = process.env.PHASE;
       if (!settingsResponse.ok || !combosResponse.ok) return false;
       const settings = await settingsResponse.json(), combo = (await combosResponse.json()).combos.find(entry => entry.name === "coder-auto");
       const config = settings.comboStrategies?.["coder-auto"]?.autoRouter;
-      return settings.comboStrategies?.["coder-auto"]?.fallbackStrategy === "auto" && config?.hardThreshold === 7 && !("easyTarget" in config) && !("hardTarget" in config) && JSON.stringify(combo?.models) === JSON.stringify(["coder", "coder-high", "coder-auto-model"]);
+      return settings.comboStrategies?.["coder-auto"]?.fallbackStrategy === "auto" && config?.hardThreshold === 7 && !("easyTarget" in config) && !("hardTarget" in config) && JSON.stringify(combo?.models) === JSON.stringify(["coder-high", "coder", "coder-auto-model"]);
     }, { timeout: 10_000 });
     await autoCard().locator("button[title=\"Edit\"]").click();
     const reloadedModal = page.getByText("Edit Combo", { exact: true }).locator("xpath=ancestor::*[.//button[normalize-space()='Save']][1]");
     await reloadedModal.waitFor({ timeout: 10_000 });
-    if (await reloadedModal.getByText("Legacy targets will be normalized to positions 1 and 2 when saved.", { exact: true }).count()) throw new Error(`${phase} legacy target notice remained after normalization`);
+    if (await reloadedModal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count()) throw new Error(`${phase} legacy target notice remained after normalization`);
     await reloadedModal.getByRole("button", { name: "Cancel", exact: true }).click();
     assertNoErrors();
   }
@@ -170,7 +169,7 @@ assert_data; stop
 
 start "$IMAGE"
 browser_combos patched-before-auto true
-settings | grep -q 'fallbackStrategy":"auto'; ! settings | grep -q '"easyTarget"'; ! settings | grep -q '"hardTarget"'; combos | grep -q '"models":\["coder","coder-high","coder-auto-model"\]'; assert_data
+settings | grep -q 'fallbackStrategy":"auto'; ! settings | grep -q '"easyTarget"'; ! settings | grep -q '"hardTarget"'; combos | grep -q '"models":\["coder-high","coder","coder-auto-model"\]'; assert_data
 KEY=$(api -X POST --data '{"name":"rollback"}' "http://127.0.0.1:$PORT/api/keys" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).key))')
 curl --fail --silent -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" --data '{"model":"coder-auto","messages":[{"role":"user","content":"rename this"}]}' "http://127.0.0.1:$PORT/api/v1/chat/completions" | grep -q 'ok'
 stop
