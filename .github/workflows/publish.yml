@@ -267,8 +267,15 @@ jobs:
   # versions straight from the image that `latest` currently points at, which makes a
   # retry of the same release idempotent: the values it writes are already the current
   # ones and the job becomes a no-op.
+  #
+  # Unlike publication, this job writes to `main`, and it only runs long after the
+  # earlier source/upstream freshness checks, so a newer commit can land on `main` in
+  # between. It therefore re-verifies ownership of `main` immediately before it
+  # commits (see the badge-state guard step) and skips badge publication when a newer
+  # source revision already owns production state. It never rebases an older release's
+  # generated badge files onto newer source.
   badge-state:
-    needs: [should-build, publish]
+    needs: [should-build, validate, publish]
     # `always()` keeps this reachable when `publish` is skipped by the stale-run
     # guard (a skipped need does not satisfy a plain success condition), while the
     # explicit result check keeps it fail-closed: failed validation, failed
@@ -279,8 +286,12 @@ jobs:
       contents: write
       packages: read
     steps:
+      # Check out the exact revision this run validated, not whatever `main` happens
+      # to be now, so generated badge state can only ever be committed on top of the
+      # source this workflow actually validated.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.validate.outputs.revision }}
           fetch-depth: 0
       - name: Authenticate to GHCR to read the known-good image
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -311,26 +322,69 @@ jobs:
           done
           printf 'auto_router_version=%s\nupstream_version=%s\nrevision=%s\n' \
             "$auto_router_version" "$upstream_version" "$revision" >> "$GITHUB_OUTPUT"
+      # Re-verify ownership of `main` before writing anything. Source freshness was
+      # checked before publication, but SemVer tagging and `latest` promotion happen in
+      # between, so `main` may have advanced since this run validated. A stale run must
+      # never modify `main`: it exits successfully so the newer production run records
+      # current badge state. Never rebase older badge files onto newer source.
+      #
+      # The guard compares the freshly fetched remote `main` tip with both the revision
+      # this run validated and the revision the known-good image records, as a
+      # read-only query.
+      - name: Verify this run still owns badge state on main
+        id: ownership
+        env:
+          # Revision recorded by the known-good image itself.
+          KNOWN_GOOD_REVISION: ${{ steps.known-good.outputs.revision }}
+          # Revision this run validated and published for.
+          VALIDATED_REVISION: ${{ needs.validate.outputs.revision }}
+        run: |
+          set -eu
+          node scripts/badge-state-guard.mjs \
+            --validated-revision "$VALIDATED_REVISION" \
+            --known-good-revision "$KNOWN_GOOD_REVISION" \
+            --github-output "$GITHUB_OUTPUT"
+          skip=$(grep -m1 '^skip=' "$GITHUB_OUTPUT" | cut -d= -f2)
+          if [ "$skip" = "true" ]; then
+            echo "Badge state skipped: this run no longer owns main." >&2
+          fi
       - name: Update known-good version badge state
+        id: badge-commit
+        if: steps.ownership.outputs.skip != 'true'
         env:
           AUTO_ROUTER_VERSION: ${{ steps.known-good.outputs.auto_router_version }}
           UPSTREAM_VERSION: ${{ steps.known-good.outputs.upstream_version }}
-          REVISION: ${{ steps.known-good.outputs.revision }}
+          VALIDATED_REVISION: ${{ needs.validate.outputs.revision }}
         run: |
           set -eu
-          ./scripts/update-version-badges.sh "$AUTO_ROUTER_VERSION" "$UPSTREAM_VERSION" "$REVISION"
+          ./scripts/update-version-badges.sh "$AUTO_ROUTER_VERSION" "$UPSTREAM_VERSION" "$VALIDATED_REVISION"
           git add .github/badges
           if git diff --cached --quiet -- .github/badges; then
             echo "Badge state already current."
+            echo 'commit=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "openhands"
           git config user.email "openhands@all-hands.dev"
-          git add .github/badges
           git commit -m "chore: record known-good versions auto-router v${AUTO_ROUTER_VERSION} / 9router v${UPSTREAM_VERSION}"
-          # A badge-only push is ignored by the `on.push.paths-ignore` filter, so this
-          # can never start another release cycle.
-          git push origin HEAD:main
+          echo 'commit=true' >> "$GITHUB_OUTPUT"
+      # Even though the guard above re-checks ownership, a commit could still land in
+      # the small window between the guard and this push. `--force-with-lease` pins the
+      # expected remote tip, so a non-fast-forward push fails loudly instead of moving
+      # `main`, and it never rewrites a newer commit.
+      - name: Publish badge state as a fast-forward of validated source
+        if: steps.badge-commit.outputs.commit == 'true'
+        env:
+          VALIDATED_REVISION: ${{ needs.validate.outputs.revision }}
+        run: |
+          set -eu
+          git fetch --quiet origin main
+          lease=$(git rev-parse FETCH_HEAD)
+          if [ "$lease" != "$VALIDATED_REVISION" ]; then
+            echo "Refusing to push badge state: origin/main (${lease}) no longer matches validated ${VALIDATED_REVISION}." >&2
+            exit 1
+          fi
+          git push origin HEAD:main --force-with-lease=refs/heads/main:"$VALIDATED_REVISION"
 
 
   promote-package-visibility:

@@ -189,3 +189,67 @@ test("unmerged pull requests and non-version labels are ignored", () => {
   assert.deepEqual(labelsForRevision(pulls, SHA), ["enhancement"]);
   assert.equal(selectBump(labelsForRevision(pulls, SHA)), "patch");
 });
+
+// The resolver diffs from the highest Auto Router release tag to the current source
+// revision. These cases lock that down: intermediate non-release commits create no
+// version of their own, but the eventual release-affecting change still resolves against
+// the accumulated source history, not only the last non-release commit.
+test("docs-only merges followed by a version:minor release produce one MINOR bump", () => {
+  // v0.1.0 -> docs-only -> docs-only -> release-affecting PR labeled version:minor
+  const result = resolveRelease({
+    currentSha: NEXT,
+    tags: releasesAt("0.1.0", SHA),
+    changedFiles: ["README.md", "docs/routing.md", "src/auto-router.cjs"],
+    labels: ["version:minor"],
+  });
+  assert.equal(result.version, "0.2.0");
+  assert.equal(result.bump, "minor");
+  assert.equal(result.previousTag, "v0.1.0");
+  assert.equal(result.createTag, true);
+});
+
+test("docs-only merges alone do not create a version, so no intermediate tag appears", () => {
+  const between = resolveRelease({
+    currentSha: NEXT,
+    tags: releasesAt("0.1.0", SHA),
+    changedFiles: ["README.md", "docs/routing.md"],
+    labels: [],
+  });
+  assert.equal(between.version, "0.1.0");
+  assert.equal(between.createTag, false);
+  assert.equal(between.previousTag, "v0.1.0");
+
+  const release = resolveRelease({
+    currentSha: "d".repeat(40),
+    tags: releasesAt("0.1.0", SHA),
+    changedFiles: ["README.md", "docs/routing.md", "src/auto-router.cjs"],
+    labels: ["version:minor"],
+  });
+  assert.equal(release.version, "0.2.0");
+});
+
+test("a docs-only direct push followed by a release-affecting direct push defaults PATCH", () => {
+  // v0.1.0 -> docs-only direct push -> release-affecting direct push (no PR labels)
+  const result = resolveRelease({
+    currentSha: NEXT,
+    tags: releasesAt("0.1.0", SHA),
+    changedFiles: ["docs/ops.md", "src/auto-router.cjs"],
+    labels: [],
+  });
+  assert.equal(result.version, "0.1.1");
+  assert.equal(result.bump, "patch");
+});
+
+test("a docs-only HEAD leaves the version unchanged and creates no tag", () => {
+  const result = resolveRelease({
+    currentSha: NEXT,
+    tags: releasesAt("0.2.0", SHA),
+    changedFiles: ["README.md", "docs/configuration.md", ".github/badges/auto-router.json"],
+    labels: [],
+  });
+  assert.equal(result.version, "0.2.0");
+  assert.equal(result.releaseAffecting, false);
+  assert.equal(result.createTag, false);
+  assert.equal(result.bump, null);
+  assert.equal(result.previousTag, "v0.2.0");
+});

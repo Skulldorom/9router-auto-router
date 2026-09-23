@@ -171,6 +171,35 @@ test("CI helper containers are digest-pinned", () => {
   assert.doesNotMatch(http, /node:22-alpine node/);
 });
 
+test("badge-state publication is fail-closed against a newer main and never rewrites history", () => {
+  const publish = workflows.find(([file]) => file === "publish.yml")?.[1] || "";
+
+  const badgeJob = publish.indexOf("badge-state:");
+  const latestPromotion = publish.indexOf('docker buildx imagetools create --tag "${IMAGE}:latest"');
+  const semverTag = publish.indexOf("Tag immutable Auto Router SemVer release");
+  assert.ok(latestPromotion >= 0 && semverTag >= 0 && badgeJob > latestPromotion,
+    "badge state must be recorded only after SemVer tagging and latest promotion");
+  assert.ok(semverTag < latestPromotion, "SemVer identity precedes latest promotion");
+
+  const guard = publish.indexOf("Verify this run still owns badge state on main");
+  const write = publish.indexOf("Update known-good version badge state");
+  const push = publish.indexOf("Publish badge state as a fast-forward of validated source");
+  assert.ok(guard >= 0 && guard < write && write < push);
+
+  // Ownership is re-derived from a freshly fetched remote before anything is written.
+  assert.match(publish, /node scripts\/badge-state-guard\.mjs \\\n\s+--validated-revision "\$VALIDATED_REVISION" \\\n\s+--known-good-revision "\$KNOWN_GOOD_REVISION"/);
+  assert.match(publish, /steps\.ownership\.outputs\.skip != 'true'/);
+  assert.match(publish, /git push origin HEAD:main --force-with-lease=refs\/heads\/main:"\$VALIDATED_REVISION"/);
+  assert.doesNotMatch(publish, /git push origin HEAD:main\s*$/m);
+  assert.doesNotMatch(publish, /--force(?![-\w])/);
+  assert.match(publish, /Refusing to push badge state: origin\/main/);
+  assert.match(publish, /git diff --cached --quiet -- \.github\/badges/);
+
+  const guardScript = fs.readFileSync(path.join(root, "scripts/badge-state-guard.mjs"), "utf8");
+  assert.match(guardScript, /ls-remote/);
+  assert.match(guardScript, /refs\/heads\/\$\{branch\}/);
+});
+
 test("lint blocks warnings and restricts CommonJS globals to runtime code", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   assert.match(manifest.scripts.lint, /eslint eslint\.config\.js auto-router-config\.cjs src patches test scripts --max-warnings=0/);
