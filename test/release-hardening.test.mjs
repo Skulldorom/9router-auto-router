@@ -157,9 +157,8 @@ test("CI helper containers are digest-pinned", () => {
   const rollback = fs.readFileSync(path.join(root, "scripts/rollback-compatibility-test.sh"), "utf8");
   assert.match(http, /node:22-alpine@sha256:[0-9a-f]{64}/);
   assert.match(rollback, /node:22-alpine@sha256:[0-9a-f]{64}/);
-  assert.match(rollback, /mcr\.microsoft\.com\/playwright@sha256:[0-9a-f]{64}/);
+  assert.match(rollback, /mcr\.microsoft\.com\/playwright:v1\.58\.2-noble@sha256:[0-9a-f]{64}/);
   assert.doesNotMatch(http, /node:22-alpine node/);
-  assert.doesNotMatch(rollback, /playwright:v1\.58\.2-noble/);
 });
 
 test("lint blocks warnings and restricts CommonJS globals to runtime code", () => {

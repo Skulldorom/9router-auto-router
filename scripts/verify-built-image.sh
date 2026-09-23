@@ -29,6 +29,7 @@ printf '%s' "$upstream_digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail "missi
 docker run --rm -i --entrypoint sh "$IMAGE" <<'SH' || fail "runtime overlay or generated UI verification failed"
 set -eu
 [ -f /opt/9router-auto-router/auto-router-config.cjs ]
+[ -f /opt/auto-router-config.cjs ]
 [ -f /opt/9router-auto-router/auto-router.cjs ]
 [ -f /opt/9router-auto-router/apply-patch.mjs ]
 runtime_files=$(grep -RFl "9router-auto-router:v3" /app/.next/server 2>/dev/null || true)
