@@ -101,19 +101,20 @@ test("a stale run cannot overwrite badge state owned by a newer release", () => 
 
   // The newer release publishes first and owns current production state.
   run("0.2.0", "0.5.90", C);
-  const owner = fs.readFileSync(path.join(dir, "auto-router.json"), "utf8");
-  assert.match(owner, /"message":\s*"v0\.2\.0"/);
+  const ownerAuto = fs.readFileSync(path.join(dir, "auto-router.json"), "utf8");
+  const ownerUpstream = fs.readFileSync(path.join(dir, "9router.json"), "utf8");
+  assert.match(ownerAuto, /"message":\s*"v0\.2\.0"/);
 
   // The older release job retries later with the same revision it validated. Its
   // stale, lower version must be refused rather than rolled back or duplicated.
   run("0.1.0", "0.5.86", A);
-  assert.equal(fs.readFileSync(path.join(dir, "auto-router.json"), "utf8"), owner);
-  assert.match(fs.readFileSync(path.join(dir, "9router.json"), "utf8"), /"message":\s*"v0\.5\.90"/);
+  assert.equal(fs.readFileSync(path.join(dir, "auto-router.json"), "utf8"), ownerAuto);
+  assert.equal(fs.readFileSync(path.join(dir, "9router.json"), "utf8"), ownerUpstream);
 
-  // Re-running the owning release remains idempotent.
+  // Re-running the owning release leaves both badge files byte-identical.
   run("0.2.0", "0.5.90", C);
-  assert.equal(fs.readFileSync(path.join(dir, "auto-router.json"), "utf8"), owner);
-  assert.equal(fs.readFileSync(path.join(dir, "9router.json"), "utf8"), fs.readFileSync(path.join(dir, "9router.json"), "utf8"));
+  assert.equal(fs.readFileSync(path.join(dir, "auto-router.json"), "utf8"), ownerAuto);
+  assert.equal(fs.readFileSync(path.join(dir, "9router.json"), "utf8"), ownerUpstream);
 });
 
 test("the guard reads the live remote tip and skips once main advances", () => {
