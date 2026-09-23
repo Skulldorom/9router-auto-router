@@ -1,8 +1,11 @@
 # 9Router Auto Router
 
-<p align="center">
+<p align="left">
   <a href="https://github.com/Skulldorom/9router-auto-router/releases"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FSkulldorom%2F9router-auto-router%2Fmain%2F.github%2Fbadges%2Fauto-router.json" alt="Auto Router version" /></a>
   <a href="https://github.com/decolua/9router"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FSkulldorom%2F9router-auto-router%2Fmain%2F.github%2Fbadges%2F9router.json" alt="Validated 9Router version" /></a>
+</p>
+
+<p align="center">
   <a href="https://ko-fi.com/skulldorom"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" /></a>
 </p>
 
