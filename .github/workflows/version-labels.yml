@@ -1,0 +1,27 @@
+name: PR version label hygiene
+
+# A pull request may declare exactly one version bump. Conflicting labels are
+# rejected here so the mistake surfaces on the PR rather than during a production
+# release, and so the release workflow can trust the merged PR's labels.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Reject tests that combine conflicting version labels
+        env:
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: node scripts/release-version.mjs check-labels

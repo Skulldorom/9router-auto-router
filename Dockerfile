@@ -3,6 +3,7 @@ ARG UPSTREAM_IMAGE=decolua/9router:latest
 FROM ${UPSTREAM_IMAGE}
 
 ARG AUTO_ROUTER_REVISION=unknown
+ARG AUTO_ROUTER_VERSION=unknown
 ARG UPSTREAM_IMAGE_NAME=decolua/9router:latest
 ARG UPSTREAM_DIGEST=unknown
 ARG UPSTREAM_VERSION=unknown
@@ -13,6 +14,8 @@ LABEL org.opencontainers.image.source="https://github.com/Skulldorom/9router-aut
       org.opencontainers.image.created="${BUILD_CREATED}" \
       org.opencontainers.image.title="9router-auto-router" \
       org.opencontainers.image.description="Validated Auto Router overlay for 9Router" \
+      org.opencontainers.image.version="${AUTO_ROUTER_VERSION}" \
+      io.github.skulldorom.9router-auto-router.version="${AUTO_ROUTER_VERSION}" \
       io.github.skulldorom.9router-auto-router.upstream.image="${UPSTREAM_IMAGE_NAME}" \
       io.github.skulldorom.9router-auto-router.upstream.digest="${UPSTREAM_DIGEST}" \
       io.github.skulldorom.9router-auto-router.upstream.version="${UPSTREAM_VERSION}"

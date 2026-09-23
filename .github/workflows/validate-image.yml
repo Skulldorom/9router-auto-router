@@ -11,6 +11,11 @@ on:
         description: Local tag for the validated image
         required: true
         type: string
+      auto_router_version:
+        description: Deterministic Auto Router semantic version resolved for this revision
+        required: false
+        default: ""
+        type: string
       upload_image:
         description: Upload the tested image for a same-run trusted publish job
         required: false
@@ -23,6 +28,8 @@ on:
         value: ${{ jobs.validate.outputs.upstream_digest }}
       upstream_version:
         value: ${{ jobs.validate.outputs.upstream_version }}
+      auto_router_version:
+        value: ${{ jobs.validate.outputs.auto_router_version }}
 
 permissions:
   contents: read
@@ -34,6 +41,7 @@ jobs:
       revision: ${{ steps.metadata.outputs.revision }}
       upstream_digest: ${{ steps.metadata.outputs.upstream_digest }}
       upstream_version: ${{ steps.metadata.outputs.upstream_version }}
+      auto_router_version: ${{ steps.version.outputs.auto_router_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -69,12 +77,30 @@ jobs:
           [ -n "$version" ] || version=unknown
           printf 'revision=%s\nupstream_digest=%s\nupstream_version=%s\n' "$GITHUB_SHA" "$RESOLVED_UPSTREAM_DIGEST" "$version" >> "$GITHUB_OUTPUT"
           printf 'UPSTREAM_IMAGE=%s\nUPSTREAM_DIGEST=%s\nUPSTREAM_VERSION=%s\n' "$immutable_image" "$RESOLVED_UPSTREAM_DIGEST" "$version" >> "$GITHUB_ENV"
+      - id: version
+        name: Determine the Auto Router version recorded in the derived image
+        env:
+          INPUT_AUTO_ROUTER_VERSION: ${{ inputs.auto_router_version }}
+        run: |
+          set -eu
+          if [ -n "$INPUT_AUTO_ROUTER_VERSION" ]; then
+            auto_router_version="$INPUT_AUTO_ROUTER_VERSION"
+          else
+            auto_router_version=$(sed -n 's/.*"version":[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -n1)
+          fi
+          printf '%s' "$auto_router_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "Invalid Auto Router version: $auto_router_version" >&2
+            exit 1
+          }
+          printf 'auto_router_version=%s\n' "$auto_router_version" >> "$GITHUB_OUTPUT"
+          printf 'AUTO_ROUTER_VERSION=%s\n' "$auto_router_version" >> "$GITHUB_ENV"
       - run: ./scripts/check-upstream-compatibility.sh
       - name: Build derived image from the validated immutable upstream image
         run: |
           docker build \
             --build-arg UPSTREAM_IMAGE="$UPSTREAM_IMAGE" \
             --build-arg AUTO_ROUTER_REVISION="$GITHUB_SHA" \
+            --build-arg AUTO_ROUTER_VERSION="$AUTO_ROUTER_VERSION" \
             --build-arg UPSTREAM_IMAGE_NAME="decolua/9router:latest" \
             --build-arg UPSTREAM_DIGEST="$UPSTREAM_DIGEST" \
             --build-arg UPSTREAM_VERSION="$UPSTREAM_VERSION" \
@@ -84,7 +110,9 @@ jobs:
         env:
           REVISION: ${{ steps.metadata.outputs.revision }}
           UPSTREAM_DIGEST: ${{ steps.metadata.outputs.upstream_digest }}
-        run: ./scripts/verify-built-image.sh "${{ inputs.image_tag }}" "$REVISION" "$UPSTREAM_DIGEST"
+          UPSTREAM_VERSION: ${{ steps.metadata.outputs.upstream_version }}
+          AUTO_ROUTER_VERSION: ${{ steps.version.outputs.auto_router_version }}
+        run: ./scripts/verify-built-image.sh "${{ inputs.image_tag }}" "$REVISION" "$UPSTREAM_DIGEST" "$AUTO_ROUTER_VERSION" "$UPSTREAM_VERSION"
       - run: ./scripts/smoke-test.sh "${{ inputs.image_tag }}"
       - run: ./scripts/runtime-test.sh "${{ inputs.image_tag }}"
       - run: ./scripts/settings-persistence-test.sh "${{ inputs.image_tag }}"

@@ -1,6 +1,8 @@
 # 9Router Auto Router
 
 <p align="center">
+  <a href="https://github.com/Skulldorom/9router-auto-router/releases"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FSkulldorom%2F9router-auto-router%2Fmain%2F.github%2Fbadges%2Fauto-router.json" alt="Auto Router version" /></a>
+  <a href="https://github.com/decolua/9router"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FSkulldorom%2F9router-auto-router%2Fmain%2F.github%2Fbadges%2F9router.json" alt="Validated 9Router version" /></a>
   <a href="https://ko-fi.com/skulldorom"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" /></a>
 </p>
 
@@ -332,6 +334,55 @@ Keep the existing `/app/data` volume.
 The overlay does not migrate or replace the normal 9Router combo schema. Auto Router configuration remains in normal per-combo strategy settings.
 
 After changing images, a browser may retain a cached patched Next.js bundle. If the Combos page looks stale after rollback, hard-refresh or use a clean/private browser session before assuming the persistent volume is damaged.
+
+## Versions
+
+Two independent versions describe a published Auto Router image:
+
+* **Auto Router `vX.Y.Z`** tracks this overlay's own source. It advances only when
+  a release-affecting change lands on `main`.
+* **9Router `vA.B.C`** tracks the upstream 9Router version the currently published
+  known-good image was validated against. It can advance on its own without moving
+  the Auto Router version.
+
+They are intentionally independent, so an upstream-only rebuild keeps the Auto
+Router version and only advances the 9Router version.
+
+Auto Router bumps follow `MAJOR.MINOR.PATCH`:
+
+* a normal release-affecting pull request uses a **patch** bump;
+* `version:patch` keeps the **patch** bump;
+* `version:minor` requests a **minor** bump;
+* `version:major` requests a **major** bump.
+
+Only one `version:*` label may apply to a pull request; conflicting labels fail the
+release instead of choosing one arbitrarily. Documentation-only changes (`README.md`,
+`docs/**`) do not bump the Auto Router version, and neither do scheduled upstream
+checks or retries. When a change mixes documentation with release-affecting files,
+the Auto Router version still bumps.
+
+### Tagging and immutability policy
+
+A published image can carry several tags with different mutability guarantees:
+
+* `latest` is mutable and points at the newest known-good source-and-upstream combination.
+* `sha-<source-revision>-upstream-<upstream-digest>` is the immutable exact
+  source/upstream identity described under [Pinning and rollback](#pinning-and-rollback).
+* `vX.Y.Z` is the immutable Auto Router SemVer release tag. It is created once for
+  the source release that first produced it and is never repointed; a later
+  upstream-only rebuild moves `latest` without mutating it.
+* The annotated git tag `vX.Y.Z` is the durable source of truth that maps an Auto
+  Router source revision to its semantic version. Only the release workflow creates
+  it, and only for the revision that introduced the version.
+
+The annotated git tag is what makes version selection deterministic and idempotent:
+scheduled rebuilds, retries, and manual re-dispatches of an already versioned revision
+always reuse the tagged version. No version is ever derived from workflow run numbers,
+timestamps, commit counts, or image counts.
+
+The README badges read repository-hosted badge state that is written only after the
+known-good image has been published and attested, so the 9Router badge never reports
+an upstream version that has not passed this project's validation.
 
 ## Upstream compatibility
 

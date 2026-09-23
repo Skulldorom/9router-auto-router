@@ -173,9 +173,9 @@ test("CI helper containers are digest-pinned", () => {
 
 test("lint blocks warnings and restricts CommonJS globals to runtime code", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.match(manifest.scripts.lint, /eslint eslint\.config\.js auto-router-config\.cjs src patches test --max-warnings=0/);
+  assert.match(manifest.scripts.lint, /eslint eslint\.config\.js auto-router-config\.cjs src patches test scripts --max-warnings=0/);
   const config = fs.readFileSync(path.join(root, "eslint.config.js"), "utf8");
-  assert.match(config, /files: \["eslint\.config\.js", "patches\/\*\*\/\*\.mjs", "test\/\*\*\/\*\.mjs"\]/);
+  assert.match(config, /files: \["eslint\.config\.js", "patches\/\*\*\/\*\.mjs", "scripts\/\*\*\/\*\.mjs", "test\/\*\*\/\*\.mjs"\]/);
   assert.match(config, /files: \["auto-router-config\.cjs", "src\/\*\*\/\*\.cjs"\]/);
   assert.match(config, /sourceType: "commonjs"/);
 });

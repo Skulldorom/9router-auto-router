@@ -24,7 +24,7 @@ const rules = {
 
 export default [
   {
-    files: ["eslint.config.js", "patches/**/*.mjs", "test/**/*.mjs"],
+    files: ["eslint.config.js", "patches/**/*.mjs", "scripts/**/*.mjs", "test/**/*.mjs"],
     languageOptions: { ecmaVersion: "latest", sourceType: "module", globals: sharedGlobals },
     rules,
   },
