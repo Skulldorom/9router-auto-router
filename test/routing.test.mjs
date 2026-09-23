@@ -267,17 +267,21 @@ test("Switching away from Auto Router persists the new strategy and drops Auto R
   }
 });
 
-test("Save failure surfaces an error and never reports success or closes the modal", () => {
+test("Save reads settings before mutating the Combo and rolls back partial edits", () => {
   const dir = fixture();
   assert.equal(patch(dir).status, 0);
   for (const file of uiFiles(dir)) {
     const patched = fs.readFileSync(file, "utf8");
-    assert.match(patched, /let saved=await [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\.id,comboData\);if\(!saved\)return;/);
-    assert.match(patched, /if\(!persisted\.ok\)\{let error=await persisted\.json\(\)\.catch\(\(\)=>\(\{\}\)\);alert\(error\.error\|\|"Failed to save combo strategy"\);return\}/);
-    // Close only happens after a successful PATCH.
-    const successClose = patched.indexOf("await ${plan.refresh}()");
-    assert.match(patched, /if\(!persisted\.ok\)[\s\S]*?return\}await [A-Za-z_$][\w$]*\(\),[A-Za-z_$][\w$]*\(null\)/);
-    assert.equal(successClose, -1);
+    const save = patched.slice(patched.indexOf("const _arSave="), patched.indexOf("let[a,b]=", patched.indexOf("const _arSave=")));
+    assert.match(save, /original=\{\.\.\.[a-z]+,models:\[\.\.\.[a-z]+\.models\]\}/);
+    assert.ok(save.indexOf('fetch("/api/settings")') < save.indexOf('saved=await'), "settings must be fetched before Combo PUT");
+    assert.match(save, /let changed=\{\.\.\.original,\.\.\.comboData,models:comboData\.models\},saved=await [A-Za-z_$][\w$]*\([a-z]+\.id,changed\);if\(!saved\)return;/);
+    assert.match(save, /let rollback=async\(message\)=>\{try\{if\(!await [A-Za-z_$][\w$]*\([a-z]+\.id,original\)\)throw Error\("Combo rollback failed"\)/);
+    assert.match(save, /The original combo was restored; update settings and retry\./);
+    assert.match(save, /could not be restored\. Refresh, then repair the combo and its Auto Router settings\./);
+    assert.match(save, /Could not confirm the settings save\. Refresh before editing again\./);
+    assert.match(save, /if\(!persisted\.ok\)\{let error=.*?await rollback\(error\.error\|\|"Failed to save combo strategy"\);return\}/);
+    assert.match(save, /await [A-Za-z_$][\w$]*\(\),[A-Za-z_$][\w$]*\(null\)/);
   }
 });
 

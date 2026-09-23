@@ -91,6 +91,20 @@ test("rollback browser regression attaches stdin, verifies execution markers, an
   assert.match(rollback, /getByRole\("button", \{ name: "Save", exact: true \}\)\.click\(\)/);
   assert.match(rollback, /getByRole\("button", \{ name: "Cancel", exact: true \}\)\.click\(\)/);
   assert.match(rollback, /browser_combos patched-before-auto true/);
+  assert.match(rollback, /getByLabel\(\/Hard threshold\/\)\.inputValue\(\) !== "7"/);
+  assert.match(rollback, /hardThreshold === 7/);
+  assert.match(rollback, /removed-easy-target/);
+  assert.match(rollback, /missing Easy target did not render as a disabled warning option/);
+  assert.match(rollback, /silently replaced a missing Easy target/);
+  assert.doesNotMatch(rollback, /waitForTimeout\(/);
+});
+
+test("browser helper images retain readable versions and immutable digests", () => {
+  const rollback = fs.readFileSync(path.join(root, "scripts/rollback-compatibility-test.sh"), "utf8");
+  assert.match(rollback, /mcr\.microsoft\.com\/playwright:v1\.58\.2-noble@sha256:[0-9a-f]{64}/);
+  assert.match(rollback, /node:22-alpine@sha256:[0-9a-f]{64}/);
+  assert.ok(rollback.includes('"$PLAYWRIGHT_IMAGE"'));
+  assert.ok(rollback.includes('"$NODE_IMAGE"'));
 });
 
 

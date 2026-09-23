@@ -13,7 +13,8 @@ MOCK_DIR=$(mktemp -d)
 WORK_DIR=$(mktemp -d)
 COOKIE_JAR="$WORK_DIR/cookies.txt"
 PASSWORD=rollback-compatibility-password
-PLAYWRIGHT_IMAGE=${PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright:v1.58.2-noble}
+PLAYWRIGHT_IMAGE=${PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d}
+NODE_IMAGE=${NODE_IMAGE:-node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85}
 OWNER_UID=$(id -u); OWNER_GID=$(id -g)
 cleanup() { status=$?; trap - EXIT INT TERM; docker rm -f "$NAME" "$MOCK_NAME" >/dev/null 2>&1 || true; docker network rm "$NETWORK" >/dev/null 2>&1 || true; rm -rf "$WORK_DIR"; purge_dir "$IMAGE" "$DATA_DIR" "$OWNER_UID" "$OWNER_GID" || true; purge_dir "$IMAGE" "$MOCK_DIR" "$OWNER_UID" "$OWNER_GID" || true; exit "$status"; }
 trap cleanup EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
@@ -21,7 +22,7 @@ prepare_data_dir "$IMAGE" "$DATA_DIR" "$(container_runtime_user "$IMAGE")"
 printf '%s\n' 'const http=require("http");http.createServer((q,s)=>{q.resume();q.on("end",()=>s.end(JSON.stringify({message:{content:"ok"}})))}).listen(8080);' > "$MOCK_DIR/server.cjs"
 chmod 644 "$MOCK_DIR/server.cjs"
 docker network create "$NETWORK" >/dev/null
-docker run -d --name "$MOCK_NAME" --network "$NETWORK" -v "$MOCK_DIR:/journal" -w /journal node:22-alpine node server.cjs >/dev/null
+docker run -d --name "$MOCK_NAME" --network "$NETWORK" -v "$MOCK_DIR:/journal" -w /journal "$NODE_IMAGE" node server.cjs >/dev/null
 start() { image=$1; rm -f "$COOKIE_JAR"; docker run -d --name "$NAME" --network "$NETWORK" --network-alias router -v "$DATA_DIR:/app/data" -e NODE_ENV=production -e INITIAL_PASSWORD="$PASSWORD" -p 127.0.0.1::20128 "$image" >/dev/null; PORT=$(docker port "$NAME" 20128/tcp | sed 's/.*://'); wait_for_login "http://127.0.0.1:$PORT/api/auth/login" "$COOKIE_JAR" "$PASSWORD" 60 || { dump_container_logs "$NAME"; exit 1; }; }
 stop() { docker rm -f "$NAME" >/dev/null; }
 api() { curl --fail --silent --show-error --cookie "$COOKIE_JAR" -H 'Content-Type: application/json' "$@"; }
@@ -106,6 +107,10 @@ const phase = process.env.PHASE;
     if (await page.getByLabel("Easy target").count() !== 1 || await page.getByLabel("Hard target").count() !== 1 || await page.getByText("Advanced", { exact: true }).count() !== 1) throw new Error(`${phase} did not show Auto Router modal controls`);
     await page.getByLabel("Easy target").selectOption("coder");
     await page.getByLabel("Hard target").selectOption("coder-high");
+    await page.getByText("Advanced", { exact: true }).click();
+    const hardThreshold = page.getByLabel(/Hard threshold/);
+    await hardThreshold.fill("7");
+    await hardThreshold.blur();
     if (settingsPatches !== 0) throw new Error(`${phase} persisted modal edits before Save`);
     const save = settingsPatch();
     await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -115,7 +120,7 @@ const phase = process.env.PHASE;
       const response = await fetch("/api/settings");
       if (!response.ok) return false;
       const saved = (await response.json()).comboStrategies?.["coder-auto"];
-      return saved?.fallbackStrategy === "auto" && saved.autoRouter?.easyTarget === "coder" && saved.autoRouter?.hardTarget === "coder-high";
+      return saved?.fallbackStrategy === "auto" && saved.autoRouter?.easyTarget === "coder" && saved.autoRouter?.hardTarget === "coder-high" && saved.autoRouter?.hardThreshold === 7;
     }, { timeout: 10_000 });
     await page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]").locator("button[title=\"Edit\"]").click();
     await page.getByLabel("Easy target").selectOption("coder-high");
@@ -131,6 +136,30 @@ const phase = process.env.PHASE;
     if (await page.locator("select").first().inputValue() !== "auto") throw new Error(`${phase} did not persist Auto Router selection`);
     if (await page.getByLabel("Easy target").inputValue() !== "coder") throw new Error(`${phase} did not persist Easy target`);
     if (await page.getByLabel("Hard target").inputValue() !== "coder-high") throw new Error(`${phase} did not persist Hard target`);
+    await page.getByText("Advanced", { exact: true }).click();
+    if (await page.getByLabel(/Hard threshold/).inputValue() !== "7") throw new Error(`${phase} did not persist the Advanced hard threshold`);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    const currentSettings = await page.request.get(`${process.env.BASE_URL}/api/settings`);
+    if (!currentSettings.ok()) throw new Error(`${phase} could not load settings for missing target coverage`);
+    const nextSettings = await currentSettings.json();
+    nextSettings.comboStrategies["coder-auto"].autoRouter.easyTarget = "removed-easy-target";
+    const missingTarget = await page.request.patch(`${process.env.BASE_URL}/api/settings`, { data: { comboStrategies: nextSettings.comboStrategies } });
+    if (!missingTarget.ok()) throw new Error(`${phase} could not persist missing target coverage state`);
+    await page.reload({ waitUntil: "networkidle" });
+    const missingCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]");
+    await missingCard.locator("button[title=\"Edit\"]").click();
+    const missingEasy = page.getByLabel("Easy target");
+    if (await missingEasy.inputValue() !== "removed-easy-target") throw new Error(`${phase} silently replaced a missing Easy target`);
+    const missingOption = page.locator('option[value="removed-easy-target"]');
+    if (!await missingOption.isDisabled()) throw new Error(`${phase} missing Easy target did not render as a disabled warning option`);
+    await missingEasy.selectOption("coder");
+    const replaceMissing = settingsPatch();
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await replaceMissing;
+    await page.reload({ waitUntil: "networkidle" });
+    const repairedCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]");
+    await repairedCard.locator("button[title=\"Edit\"]").click();
+    if (await page.getByLabel("Easy target").inputValue() !== "coder" || await page.locator('option[value="removed-easy-target"]').count()) throw new Error(`${phase} did not replace the stale Easy target`);
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     assertNoErrors();
   }
