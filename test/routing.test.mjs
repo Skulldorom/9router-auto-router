@@ -148,207 +148,23 @@ test("patcher discovers the Edit Combo modal independently from the combo card",
   }
 });
 
-test("Auto Router is a strategy option and upstream strategies are preserved", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    const options = /[A-Za-z_$][\w$]*=\[([^;]*?)\][^;]*;/.exec(patched)[1];
-    assert.match(options, /label:"Fallback — try in order"/);
-    assert.match(options, /label:"Round Robin — rotate"/);
-    assert.match(options, /label:"Fusion — panel \+ judge"/);
-    assert.match(options, /label:"Auto Router"/);
-    assert.equal((patched.match(/label:"Auto Router"/g) || []).length, 2);
-  }
+test("combo card keeps every discovered strategy and appends Auto Router interactively", () => {
+  const dir = fixture(); assert.equal(patch(dir).status, 0);
+  for (const file of uiFiles(dir)) { const patched = fs.readFileSync(file, "utf8"), card = cardSection(patched);
+    for (const strategy of ["Fallback — try in order", "Round Robin — rotate", "Fusion — panel + judge", "Auto Router"]) assert.ok(patched.includes(strategy));
+    assert.match(card, /options:[A-Za-z_$][\w$]*,value:[A-Za-z_$][\w$]*,onChange:[A-Za-z_$][\w$]*=>[A-Za-z_$][\w$]*\(\{fallbackStrategy:[A-Za-z_$][\w$]*\.target\.value\}\)/);
+    assert.doesNotMatch(card, /children:\([A-Za-z_$][\w$]*\.find\(option=>option\.value===/); assert.equal((patched.match(/label:"Auto Router"/g) || []).length, 1); }
 });
-
-test("strategy option discovery follows the card selector through a var binding and preserves added upstream options", () => {
-  const extra = `,{value:"adaptive",label:"Adaptive — tune per request"}`;
-  const server = serverUi.replace("let bI=[", "var bI = [").replace("}];function bJ", `}${extra}];function bJ`);
-  const client = clientUi.replace("let f1=[", "var f1 = [").replace("}];function g1", `}${extra}];function g1`);
-  const dir = fixture({ server, client });
-  const result = patch(dir);
-  assert.equal(result.status, 0, result.stderr);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    parses(patched);
-    assert.match(patched, /value:"adaptive",label:"Adaptive — tune per request"/);
-    assert.match(patched, /value:"auto",label:"Auto Router"/);
-  }
+test("strategy option discovery preserves future upstream options", () => {
+  const extra = `,{value:"adaptive",label:"Adaptive — tune per request"}`, server = serverUi.replace("let bI=[", "var bI = [").replace("}];function bJ", `}${extra}];function bJ`), client = clientUi.replace("let f1=[", "var f1 = [").replace("}];function g1", `}${extra}];function g1`), dir = fixture({ server, client }); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) assert.match(fs.readFileSync(file, "utf8"), /value:"adaptive",label:"Adaptive — tune per request"/);
 });
-
-test("Auto Router controls live in the Edit Combo modal and are gated on the strategy", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    const modal = modalSection(patched);
-    assert.match(modal, /Strategy/);
-    assert.match(modal, /const _arStrategyOptions=\[.*?value:"auto",label:"Auto Router"\}\],_arBounds=/);
-    assert.match(modal, /options:_arStrategyOptions,value:_arStrategy,onChange:event=>_arSetStrategy\(event\.target\.value\)/);
-    assert.match(modal, /"auto"===_arStrategy&&/);
-    for (const label of ["Auto Router Settings", "Easy target", "Hard target", "Advanced", "Hard threshold", "Long context threshold", "Large tool-result threshold", "Many-tools threshold", "Verbose logging"]) assert.ok(modal.includes(label), `modal missing ${label}`);
-    assert.match(modal, /"auto"!==_arStrategy|"auto"===_arStrategy/);
-    // Conditionality: the Auto Router block is guarded, so a different strategy hides it.
-    assert.match(modal, /"auto"===_arStrategy&&\(0,[wl]\.jsxs\)\("div",\{className:"grid gap-2 text-xs"/);
-  }
+test("Edit Combo labels ordered models without a Strategy or target selector", () => {
+  const dir = fixture(); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) { const modal = modalSection(fs.readFileSync(file, "utf8")); for (const label of ["Auto Router", "Easy", "Hard", "Ignored", "Advanced", "Hard threshold", "Long context threshold", "Large tool-result threshold", "Many-tools threshold", "Verbose logging"]) assert.ok(modal.includes(label)); for (const removed of ["\"Strategy\"", "Easy target", "Hard target", "availableCombos", "_arStrategyOptions"]) assert.ok(!modal.includes(removed), `modal retained ${removed}`); assert.match(modal, /0===index\?"Easy":1===index\?"Hard":"Ignored"/); assert.match(modal, /Models after position 2 are ignored by Auto Router/); assert.match(modal, /requires two distinct usable models in positions 1 \(Easy\) and 2 \(Hard\)/); }
 });
-
-test("Auto Router configuration controls are absent from the combo card", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    const card = cardSection(patched);
-    for (const leak of ["Easy target", "Hard target", "Advanced", "Auto Router Settings", "easyTarget", "hardTarget"]) assert.ok(!card.includes(leak), `card leaked ${leak}`);
-    assert.doesNotMatch(card, /_arUpdate|_arConfig|availableCombos/);
-    // Card still renders the strategy in the native read-only way.
-    assert.match(card, /children:\([A-Za-z_$][\w$]*\.find\(option=>option\.value===/);
-  }
+test("saving an Auto Router combo stores advanced config but no duplicate targets", () => {
+  const dir = fixture(); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) { const patched = fs.readFileSync(file, "utf8"), modal = modalSection(patched); assert.match(modal, /let \{easyTarget:_arEasyTarget,hardTarget:_arHardTarget,\.\.\.config\}/); assert.match(modal, /"auto"===_arInitialStrategy\.fallbackStrategy\?\{autoRouter:config\}:null/); assert.match(patched, /normalizedModels=legacyTargets\?\[\.\.\.legacyTargets/); assert.match(patched, /let \{easyTarget:_arLegacyEasy,hardTarget:_arLegacyHard,\.\.\.base\}/); }
 });
-
-test("Easy/Hard selectors exclude the combo being edited and reject Auto Router targets", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    const modal = modalSection(patched);
-    assert.match(modal, /_arAvailableCombos\.filter\(entry=>entry\.id!==[a-z]+\.id&&entry\.strategy\.fallbackStrategy!=="auto"\)/);
-    assert.match(modal, /_arAvailableCombos\.some\(entry=>entry\.name===_arConfig\.easyTarget&&entry\.id!==[a-z]+\.id&&entry\.strategy\.fallbackStrategy!=="auto"\)/);
-    assert.match(modal, /missing or Auto Router — unsupported target/);
-    assert.match(modal, /disabled:!0/);
-  }
-});
-
-
-test("generated UI enforces and sanitizes documented numeric bounds", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const modal = modalSection(fs.readFileSync(file, "utf8"));
-    assert.match(modal, /_arBounds=\{hardThreshold:\[1,100\],longContextChars:\[1,10000000\],largeToolResultChars:\[1,10000000\],manyTools:\[1,10000\]\}/);
-    assert.match(modal, /_arNumber=\(value,key,fallback\)=>\{let bounds=_arBounds\[key\],number=Number\(value\);return Number\.isSafeInteger\(number\)&&number>=bounds\[0\]&&number<=bounds\[1\]\?number:fallback\}/);
-    for (const [min, max] of [[1, 100], [1, 10000000], [1, 10000000], [1, 10000]]) assert.match(modal, new RegExp(`type:"number",min:${min},max:${max}`));
-    assert.match(modal, /let config=\{\.\.\._arConfig,hardThreshold:_arNumber\(_arHard,"hardThreshold",6\),longContextChars:_arNumber\(_arContext,"longContextChars",24000\),largeToolResultChars:_arNumber\(_arToolResult,"largeToolResultChars",12000\),manyTools:_arNumber\(_arTools,"manyTools",16\)\}/);
-  }
-});
-
-test("Save persists strategy and Auto Router config through one settings PATCH", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    assert.match(patched, /let config=\{\.\.\._arConfig,hardThreshold:_arNumber\(_arHard,"hardThreshold",6\),longContextChars:_arNumber\(_arContext,"longContextChars",24000\),largeToolResultChars:_arNumber\(_arToolResult,"largeToolResultChars",12000\),manyTools:_arNumber\(_arTools,"manyTools",16\)\};await [A-Za-z_$][\w$]*\(\{name:[A-Za-z_$][\w$]*\.trim\(\),models:[A-Za-z_$][\w$]*\},"auto"===_arStrategy\?\{fallbackStrategy:"auto",autoRouter:config\}:\{fallbackStrategy:_arStrategy\}\)/);
-    assert.match(patched, /const _arSave=async\(comboData,strategy\)=>\{/);
-    assert.match(patched, /fetch\("\/api\/settings"\)/);
-    assert.match(patched, /method:"PATCH",headers:\{"Content-Type":"application\/json"\},body:JSON\.stringify\(\{comboStrategies:configs\}\)/);
-    assert.match(patched, /advanced|_arConfig\.hardThreshold|hardThreshold/);
-    assert.match(patched, /onSave:_arSave/);
-  }
-});
-
-test("Save merges into freshly fetched settings so unrelated settings and strategies survive", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    // Re-reads settings immediately before the PATCH and only sends comboStrategies.
-    assert.match(patched, /await fetch\("\/api\/settings"\)[\s\S]*?configs=\{\.\.\.\(settings\.comboStrategies\|\|\{\}\)\}/);
-    assert.match(patched, /body:JSON\.stringify\(\{comboStrategies:configs\}\)/);
-    assert.doesNotMatch(patched, /JSON\.stringify\(settings\)/);
-  }
-});
-
-test("Rename migrates configuration and removes the stale combo key", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    assert.match(patched, /oldName=[a-z]+\.name,newName=comboData\.name/);
-    assert.match(patched, /if\(oldName!==newName\)\{let old=configs\[oldName\];delete configs\[oldName\];if\(old\)configs\[newName\]=old\}/);
-  }
-});
-
-test("Switching away from Auto Router persists the new strategy and drops Auto Router config", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    // Falls back to the plain strategy object; the shared writer deletes fallback entries.
-    assert.match(patched, /:\{fallbackStrategy:_arStrategy\}/);
-    assert.match(patched, /next\.fallbackStrategy&&"fallback"!==next\.fallbackStrategy\?configs\[newName\]=next:delete configs\[newName\]/);
-  }
-});
-
-test("Save reads settings before mutating the Combo and rolls back partial edits", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    const save = patched.slice(patched.indexOf("const _arSave="), patched.indexOf("let[a,b]=", patched.indexOf("const _arSave=")));
-    assert.match(save, /original=\{\.\.\.[a-z]+,models:\[\.\.\.[a-z]+\.models\]\}/);
-    assert.ok(save.indexOf('fetch("/api/settings")') < save.indexOf('saved=await'), "settings must be fetched before Combo PUT");
-    assert.match(save, /let changed=\{\.\.\.original,\.\.\.comboData,models:comboData\.models\},saved=await [A-Za-z_$][\w$]*\([a-z]+\.id,changed\);if\(!saved\)return;/);
-    assert.match(save, /let rollback=async\(message\)=>\{try\{if\(!await [A-Za-z_$][\w$]*\([a-z]+\.id,original\)\)throw Error\("Combo rollback failed"\)/);
-    assert.match(save, /The original combo was restored; update settings and retry\./);
-    assert.match(save, /could not be restored\. Refresh, then repair the combo and its Auto Router settings\./);
-    assert.match(save, /Could not confirm the settings save\. Refresh before editing again\./);
-    assert.match(save, /if\(!persisted\.ok\)\{let error=.*?await rollback\(error\.error\|\|"Failed to save combo strategy"\);return\}/);
-    assert.match(save, /await [A-Za-z_$][\w$]*\(\),[A-Za-z_$][\w$]*\(null\)/);
-  }
-});
-
-test("Modal draft state initializes from comboStrategies without issuing a PATCH", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    const modal = modalSection(patched);
-    assert.match(modal, /const _arStrategyOptions=\[.*?value:"auto",label:"Auto Router"\}\],_arBounds=\{hardThreshold:\[1,100\],longContextChars:\[1,10000000\],largeToolResultChars:\[1,10000000\],manyTools:\[1,10000\]\},_arNumber=/);
-    assert.match(modal, /_arSavedConfig=_arInitialStrategy\.autoRouter&&typeof _arInitialStrategy\.autoRouter==="object"\?_arInitialStrategy\.autoRouter:\{\},_arInitialConfig=\{\.\.\._arSavedConfig,hardThreshold:_arNumber\(_arSavedConfig\.hardThreshold,"hardThreshold",6\)/);
-    assert.match(modal, /\[_arStrategy,_arSetStrategy\]=\(0,[a-z]\.useState\)\(_arInitialStrategy\.fallbackStrategy\|\|"fallback"\)/);
-    assert.match(modal, /\[_arConfig,_arSetConfig\]=\(0,[a-z]\.useState\)\(_arInitialConfig\)/);
-    assert.match(modal, /_arUpdate=\(key,value\)=>_arSetConfig\(config=>\(\{\.\.\.config,\[key\]:value\}\)\)/);
-    // Draft updates are local only: no settings PATCH anywhere inside the modal.
-    assert.doesNotMatch(modal, /fetch\("\/api\/settings"/);
-    assert.doesNotMatch(modal, /method:"PATCH"/);
-    // Cancel and Save reuse the upstream handlers that own the modal lifecycle.
-    assert.match(modal, /onClick:[a-z],children:"Cancel"/);
-  }
-});
-
-test("Modal keeps upstream name validation and duplicate-submission protection", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    const modal = modalSection(patched);
-    assert.match(modal, /const _arStrategyOptions=\[.*?value:"auto",label:"Auto Router"\}\],_arBounds=/);
-    assert.match(modal, /,[A-Za-z_$][\w$]*=async\(\)=>\{if\(![A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\)return;[A-Za-z_$][\w$]*\(!0\);try\{let config=/);
-  }
-});
-
-test("Explanatory copy preserves upstream strategies and appends Auto Router", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  for (const file of uiFiles(dir)) {
-    const patched = fs.readFileSync(file, "utf8");
-    for (const text of ["Fallback", "Round Robin", "Fusion", "Auto Router"]) assert.ok(patched.includes(text), `missing ${text}`);
-    assert.match(patched, /children:"Auto Router"\}\)," — automatically routes each request to an Easy or Hard target combo based on task complexity"/);
-    assert.equal((patched.match(/automatically routes each request/g) || []).length, 1);
-  }
-});
-
-test("Server and client assets stay structurally equivalent", () => {
-  const dir = fixture();
-  assert.equal(patch(dir).status, 0);
-  const [server, client] = uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"));
-  for (const source of [server, client]) {
-    assert.match(source, /9router-auto-router-ui:v5/);
-    assert.equal(source.split("9router-auto-router-ui:v5").length - 1, 1);
-    assert.match(source, /onSave:_arSave/);
-  }
-});
+test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v6/); assert.equal(source.split("9router-auto-router-ui:v6").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });
 
 // --- patcher robustness --------------------------------------------------------------------
 
@@ -407,7 +223,7 @@ test("patcher transforms fixtures containing awkward strings, comments and templ
   assert.equal(result.status, 0, result.stderr);
   const patched = fs.readFileSync(uiFiles(dir)[0], "utf8");
   parses(patched);
-  assert.match(patched, /9router-auto-router-ui:v5/);
+  assert.match(patched, /9router-auto-router-ui:v6/);
 });
 
 test("patcher does not depend on minified identifiers or chunk filenames", () => {

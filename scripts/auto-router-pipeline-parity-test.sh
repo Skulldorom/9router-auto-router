@@ -85,11 +85,11 @@ api() { curl --fail --silent --show-error --max-time 30 --cookie "$COOKIE_JAR" -
 complete() { curl --fail --silent --show-error --max-time 30 -H 'Content-Type: application/json' -H "Authorization: Bearer ${API_KEY}" --data "@$1" "http://127.0.0.1:${PORT}/api/v1/chat/completions"; }
 
 api -X POST --data "{\"provider\":\"ollama-local\",\"name\":\"mock\",\"apiKey\":\"test\",\"providerSpecificData\":{\"baseUrl\":\"http://${MOCK_NAME}:8080\"}}" "http://127.0.0.1:${PORT}/api/providers" >/dev/null
-for combo in coder-high coder-auto; do
-  if [ "$combo" = coder-high ]; then models='["ollama-local/coder-high-first","ollama-local/coder-high-final"]'; else models='["ollama-local/coder-auto-placeholder"]'; fi
+for combo in coder-easy coder-high coder-auto; do
+  if [ "$combo" = coder-high ]; then models='["ollama-local/coder-high-first","ollama-local/coder-high-final"]'; elif [ "$combo" = coder-easy ]; then models='["ollama-local/coder-easy"]'; else models='["coder-easy","coder-high"]'; fi
   api -X POST --data "{\"name\":\"${combo}\",\"models\":${models}}" "http://127.0.0.1:${PORT}/api/combos" >/dev/null
 done
-api -X PATCH --data '{"rtkEnabled":true,"headroomEnabled":true,"headroomTimeoutMs":3000,"comboStrategies":{"coder-auto":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"coder-high","hardTarget":"coder-high"}},"coder-high":{"fallbackStrategy":"fallback"}}}' "http://127.0.0.1:${PORT}/api/settings" >/dev/null
+api -X PATCH --data '{"rtkEnabled":true,"headroomEnabled":true,"headroomTimeoutMs":3000,"comboStrategies":{"coder-auto":{"fallbackStrategy":"auto","autoRouter":{}},"coder-high":{"fallbackStrategy":"fallback"}}}' "http://127.0.0.1:${PORT}/api/settings" >/dev/null
 API_KEY=$(api -X POST --data '{"name":"pipeline-parity"}' "http://127.0.0.1:${PORT}/api/keys" | node -e 'let data="";process.stdin.on("data",chunk=>data+=chunk);process.stdin.on("end",()=>process.stdout.write(JSON.parse(data).key))')
 
 node - <<'NODE' > "${WORK_DIR}/payload-base.json"

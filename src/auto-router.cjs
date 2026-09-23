@@ -325,17 +325,34 @@ function validateAutoTarget(comboName, target, comboStrategies, globalStrategy, 
   if (strategyFor(target, comboStrategies, globalStrategy) === "auto") throw new Error(`recursion blocked: ${described} is configured with fallbackStrategy "auto"; Auto Router → Auto Router chaining is not supported.`);
 }
 
-function selectRoute(body, comboName, { env = process.env, comboStrategies = {}, globalStrategy = "fallback", knownCombos } = {}) {
+function legacyTargets(config) {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return null;
+  const easy = nonEmptyString(config.easyTarget), hard = nonEmptyString(config.hardTarget);
+  return easy && hard ? [easy, hard] : null;
+}
+function orderedTargets(models) {
+  if (!Array.isArray(models)) return null;
+  const targets = models.slice(0, 2).map(nonEmptyString);
+  return targets[0] && targets[1] ? targets : null;
+}
+function effectiveTargets(models, persisted) {
+  // Versions before model-order routing persisted target names separately. Honor both
+  // together only until Edit Combo saves, which atomically moves them into models[0..1].
+  const targets = legacyTargets(persisted) || orderedTargets(models);
+  if (!targets || targets[0] === targets[1]) throw new Error("requires two distinct usable models in positions 1 (Easy) and 2 (Hard).");
+  return targets;
+}
+function selectRoute(body, comboName, { env = process.env, comboStrategies = {}, globalStrategy = "fallback", knownCombos, models } = {}) {
   const persisted = comboStrategies?.[comboName]?.autoRouter;
-  const config = getConfig(env, persisted), classification = classifyTaskComplexity(body, config);
-  const target = classification.level === "easy" ? config.easyTarget : config.hardTarget;
-  if (!target) throw new Error(`target is empty for combo "${comboName}". Configure Easy target and Hard target in the combo's Auto Router settings.`);
+  const [easyTarget, hardTarget] = effectiveTargets(models, persisted);
+  const config = { ...getConfig(env, persisted), easyTarget, hardTarget }, classification = classifyTaskComplexity(body, config);
+  const target = classification.level === "easy" ? easyTarget : hardTarget;
   validateAutoTarget(comboName, target, comboStrategies, globalStrategy, knownCombos ? new Set(knownCombos) : null, classification.level === "easy" ? "Easy" : "Hard");
   return { target, classification, config };
 }
 
 function errorResponse(message) { return new Response(JSON.stringify({ error: { message: `AUTO-ROUTER: ${message}` } }), { status: 400, headers: { "Content-Type": "application/json" } }); }
-async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy, log, delegate, targetExists }) {
+async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy, log, delegate, targetExists, models }) {
   const active = body && typeof body === "object" ? activeAutoCombos.get(body) : null;
   if (active?.has(comboName)) {
     const message = `recursion blocked: combo "${comboName}" was reached again while resolving this request.`;
@@ -348,13 +365,13 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   try {
     let route;
     try {
-      route = selectRoute(body, comboName, { comboStrategies, globalStrategy });
+      route = selectRoute(body, comboName, { comboStrategies, globalStrategy, models });
     } catch (error) {
       log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`);
       return errorResponse(error.message);
     }
     const { target, classification, config } = route;
-    if (targetExists) {
+    if (targetExists && legacyTargets(comboStrategies?.[comboName]?.autoRouter)) {
       // A resolver that resolves to `false` means the configured target is genuinely
       // absent -> Auto Router configuration error. A resolver that throws/rejects is an
       // upstream failure: let it propagate so it is not misreported as a bad target.
@@ -375,4 +392,4 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   }
 }
 
-module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget };
+module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget, effectiveTargets };

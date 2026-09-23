@@ -61,9 +61,12 @@ fi
 api() { curl --fail --silent --show-error --max-time 20 --cookie "$COOKIE_JAR" -H 'Content-Type: application/json' "$@"; }
 
 api -X POST --data "{\"provider\":\"ollama-local\",\"name\":\"mock\",\"apiKey\":\"test\",\"providerSpecificData\":{\"baseUrl\":\"http://${MOCK_NAME}:8080\"}}" "http://127.0.0.1:${PORT}/api/providers" >/dev/null
-for combo in easy hard agent fallback-combo auto-target; do api -X POST --data "{\"name\":\"${combo}\",\"models\":[\"ollama-local/${combo}-model\"]}" "http://127.0.0.1:${PORT}/api/combos" >/dev/null; done
+for combo in easy hard fallback-combo auto-target; do api -X POST --data "{\"name\":\"${combo}\",\"models\":[\"ollama-local/${combo}-model\"]}" "http://127.0.0.1:${PORT}/api/combos" >/dev/null; done
+api -X POST --data '{"name":"agent","models":["easy","hard","fallback-combo"]}' "http://127.0.0.1:${PORT}/api/combos" >/dev/null
+AGENT_ID=$(api "http://127.0.0.1:${PORT}/api/combos" | node -e 'let data="";process.stdin.on("data",chunk=>data+=chunk);process.stdin.on("end",()=>{let combo=JSON.parse(data).combos.find(combo=>combo.name==="agent");if(!combo)process.exit(1);process.stdout.write(combo.id)})')
 API_KEY=$(api -X POST --data '{"name":"integration"}' "http://127.0.0.1:${PORT}/api/keys" | node -e 'let data="";process.stdin.on("data",chunk=>data+=chunk);process.stdin.on("end",()=>process.stdout.write(JSON.parse(data).key))')
 set_auto() { api -X PATCH --data "{\"comboStrategies\":{\"agent\":{\"fallbackStrategy\":\"auto\",\"autoRouter\":${1}}}}" "http://127.0.0.1:${PORT}/api/settings" >/dev/null; }
+set_models() { api -X PUT --data "{\"name\":\"agent\",\"models\":${1}}" "http://127.0.0.1:${PORT}/api/combos/${AGENT_ID}" >/dev/null; }
 complete() { curl --silent --show-error --max-time 20 -H 'Content-Type: application/json' -H "Authorization: Bearer ${API_KEY}" --data "$1" "http://127.0.0.1:${PORT}/api/v1/chat/completions"; }
 journal() { cat "${MOCK_DIR}/requests.jsonl" 2>/dev/null || true; }
 count_model() { journal | grep -c "$1" || true; }
@@ -74,7 +77,7 @@ expect_error() {
   return 0
 }
 
-set_auto '{"easyTarget":"easy","hardTarget":"hard"}'
+set_auto '{}'
 EASY_REQUEST='{"model":"agent","messages":[{"role":"user","content":"rename this button sentinel-easy"}],"stream":false,"tools":[{"type":"function","function":{"name":"ping","parameters":{"type":"object"}}}]}'
 HARD_REQUEST='{"model":"agent","messages":[{"role":"user","content":"fully audit this repository concurrency race condition sentinel-hard"}],"stream":true,"tools":[{"type":"function","function":{"name":"ping","parameters":{"type":"object"}}}]}'
 easy_response=$(complete "$EASY_REQUEST")
@@ -85,7 +88,7 @@ printf '%s' "$hard_response" | grep -q 'data: ' || { echo "Hard streaming reques
 
 [ "$(count_model easy-model)" -eq 1 ] || { echo "Expected exactly one easy-model provider call, saw $(count_model easy-model)." >&2; journal >&2; exit 1; }
 [ "$(count_model hard-model)" -eq 1 ] || { echo "Expected exactly one hard-model provider call, saw $(count_model hard-model)." >&2; journal >&2; exit 1; }
-[ "$(journal | grep -c '"url":"/api/chat"')" -eq 2 ] || { echo "Expected exactly two provider requests (no fan-out)." >&2; journal >&2; exit 1; }
+[ "$(journal | grep -c '"url":"/api/chat"')" -eq 2 ] || { echo "Expected exactly two provider requests; models after position 2 must be ignored." >&2; journal >&2; exit 1; }
 
 easy_body=$(journal | grep -m1 'easy-model')
 hard_body=$(journal | grep -m1 'hard-model')
@@ -104,6 +107,16 @@ printf '%s' "$logs" | grep -q 'Combo "easy" with 1 models' || { printf '%s\n' "$
 printf '%s' "$logs" | grep -q 'Combo "hard" with 1 models' || { printf '%s\n' "$logs" >&2; exit 1; }
 printf '%s' "$logs" | grep -q '\[COMBO\] Trying model 1/1: ollama-local/easy-model' || { printf '%s\n' "$logs" >&2; exit 1; }
 printf '%s' "$logs" | grep -q '\[COMBO\] Trying model 1/1: ollama-local/hard-model' || { printf '%s\n' "$logs" >&2; exit 1; }
+
+# Ordered models are authoritative: reordering swaps effective Easy and Hard targets,
+# and later models remain ignored.
+set_models '["hard","easy","fallback-combo"]'
+reordered_easy=$(complete '{"model":"agent","messages":[{"role":"user","content":"rename this after reorder"}]}')
+printf '%s' "$reordered_easy" | grep -Eq '"content":"ok"|data: ' || { echo "Reordered Easy request failed: ${reordered_easy}" >&2; exit 1; }
+[ "$(count_model hard-model)" -eq 2 ] || { echo "Reordering models did not change the Easy target." >&2; journal >&2; exit 1; }
+set_models '["only"]'
+expect_error '{"model":"agent","messages":[{"role":"user","content":"missing hard target"}]}' 'requires two distinct usable models'
+set_models '["easy","hard","fallback-combo"]'
 
 set_auto '{"easyTarget":"ghost-easy","hardTarget":"hard"}'
 expect_error '{"model":"agent","messages":[{"role":"user","content":"rename this button"}]}' 'Easy target .*ghost-easy.* does not exist'

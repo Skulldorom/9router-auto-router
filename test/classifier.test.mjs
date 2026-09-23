@@ -4,7 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import router from "../src/auto-router.cjs";
 
-const { classifyTaskComplexity, selectRoute, routeAutoCombo } = router;
+const { classifyTaskComplexity, selectRoute: selectConfiguredRoute } = router;
+const selectRoute = (body, comboName, options = {}) => selectConfiguredRoute(body, comboName, { models: ["coder", "coder-high"], ...options });
+const routeAutoCombo = (options) => router.routeAutoCombo({ models: ["coder", "coder-high"], ...options });
 const message = (content) => ({ model: "coder-auto", messages: [{ role: "user", content }] });
 const classifierCorpus = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures/classifier-corpus.json"), "utf8"));
 const openHandsTools = ["terminal", "file_editor", "browser", "task_tracker", "canvas_ui_control", "search", "git", "python", "node", "docker", "planner", "workspace"].map((name) => ({ type: "function", function: { name, description: `Sanitized ${name} tool`, parameters: { type: "object", properties: {} } } }));
@@ -290,12 +292,10 @@ test("malformed and empty requests safely choose hard without rejecting sparse r
   assert.equal(classifyTaskComplexity(null).level, "hard"); assert.equal(classifyTaskComplexity({}).level, "hard");
   assert.equal(classifyTaskComplexity({ model: "coder-auto", messages: [{ role: "user", content: "ok" }] }).level, "easy");
 });
-test("configured target selection and recursion protection work", () => {
+test("ordered targets do not fall back to legacy environment target variables", () => {
   const env = { AUTO_ROUTER_EASY_TARGET: "fast", AUTO_ROUTER_HARD_TARGET: "careful" };
-  assert.equal(selectRoute(message("hello"), "coder-auto", { env }).target, "fast");
-  assert.equal(selectRoute(message("fully audit this"), "coder-auto", { env }).target, "careful");
-  assert.throws(() => selectRoute(message("hello"), "coder-auto", { env: { AUTO_ROUTER_EASY_TARGET: "coder-auto" } }), /recursion blocked/);
-  assert.throws(() => selectRoute(message("hello"), "coder-auto", { env, comboStrategies: { fast: { fallbackStrategy: "auto" } } }), /recursion blocked/);
+  assert.equal(selectRoute(message("hello"), "coder-auto", { env }).target, "coder");
+  assert.equal(selectRoute(message("fully audit this"), "coder-auto", { env }).target, "coder-high");
 });
 test("indirect recursion is blocked per request", async () => {
   const body = message("hello"), log = { info() {}, warn() {} };
@@ -510,3 +510,18 @@ test("cloned delegation cannot bypass static Auto Router protection", async () =
   assert.equal(response.status, 400);
   assert.match((await response.json()).error.message, /chaining is not supported/);
 });
+
+
+test("model order is the Auto Router target source", () => {
+  const easy = message("hello"), hard = message("fully audit this");
+  assert.equal(selectConfiguredRoute(easy, "auto", { models: ["easy", "hard"] }).target, "easy");
+  assert.equal(selectConfiguredRoute(hard, "auto", { models: ["easy", "hard", "ignored"] }).target, "hard");
+  assert.equal(selectConfiguredRoute(easy, "auto", { models: ["hard", "easy", "ignored"] }).target, "hard");
+  assert.equal(selectConfiguredRoute(hard, "auto", { models: ["replacement", "hard"] }).target, "hard");
+  assert.equal(selectConfiguredRoute(easy, "auto", { models: ["replacement", "hard"] }).target, "replacement");
+  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: [] }), /requires two distinct usable models/);
+  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: ["only"] }), /requires two distinct usable models/);
+  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: ["same", "same"] }), /requires two distinct usable models/);
+});
+test("legacy target configuration remains effective until UI normalization", () => { const persisted = { auto: { fallbackStrategy: "auto", autoRouter: { easyTarget: "legacy-easy", hardTarget: "legacy-hard", hardThreshold: 1 } } }; const result = selectConfiguredRoute(message("fully audit this"), "auto", { models: ["new-easy", "new-hard"], comboStrategies: persisted }); assert.equal(result.target, "legacy-hard"); assert.equal(result.config.easyTarget, "legacy-easy"); });
+test("missing ordered models return a controlled runtime configuration error", async () => { const response = await router.routeAutoCombo({ body: message("hello"), comboName: "auto", comboStrategies: {}, models: ["only"], log: { info() {}, warn() {} }, delegate: () => new Response("unexpected") }); assert.equal(response.status, 400); assert.match((await response.json()).error.message, /requires two distinct usable models/); });

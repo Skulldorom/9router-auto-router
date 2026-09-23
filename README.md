@@ -76,18 +76,19 @@ These are normal 9Router combos and can keep their own fallback or Round Robin c
 
 ### 3. Create an Auto Router combo
 
-Create another combo, for example `coder-auto`.
+Create another combo, for example `coder-auto`. On its combo card, select **Auto Router** from the normal **Strategy** selector.
 
-Select **Edit Combo**, choose **Auto Router** in the **Strategy** selector, configure:
+Open **Edit Combo** and arrange the Models list:
 
 ```text
-Easy target: coder
-Hard target: coder-high
+1  coder        Easy
+2  coder-high   Hard
+3  backup       Ignored
 ```
 
-Optionally expand **Advanced** to tune the classifier thresholds, then select **Save**. The combo card only displays its selected strategy; Auto Router controls stay in **Edit Combo**.
+The first model receives Easy requests, the second receives Hard requests, and models after position 2 are ignored by Auto Router. Reorder the list to change targets. **Advanced** contains classifier tuning such as thresholds and verbose logging.
 
-No `AUTO_ROUTER_*` environment variables are required for normal setup.
+Strategy selection stays on the combo card. Auto Router details stay in **Edit Combo**. No `AUTO_ROUTER_*` environment variables are required for normal setup.
 
 ### 4. Use it
 
@@ -217,7 +218,7 @@ Every routing decision can log the combo, level, selected target, bounded score,
 
 Most users should configure Auto Router entirely through the normal 9Router UI.
 
-The persisted per-combo configuration looks like:
+The combo's ordered `models` are its targets: `models[0]` is Easy, `models[1]` is Hard, and later models are ignored. The persisted per-combo settings contain only classifier configuration:
 
 ```json
 {
@@ -225,8 +226,6 @@ The persisted per-combo configuration looks like:
     "coder-auto": {
       "fallbackStrategy": "auto",
       "autoRouter": {
-        "easyTarget": "coder",
-        "hardTarget": "coder-high",
         "hardThreshold": 6,
         "longContextChars": 24000,
         "largeToolResultChars": 12000,
@@ -260,22 +259,18 @@ Invalid or missing values fall through to the next source.
 
 ### Target rules
 
-Easy and Hard targets must be ordinary 9Router combos.
+An Auto Router combo requires two distinct usable models. The runtime returns a controlled configuration error for zero, one, duplicate, or malformed targets; it never routes both levels to one model. Reordering Models changes the effective targets on the next saved combo.
 
-Auto Router → Auto Router chaining is intentionally unsupported. The UI excludes the current combo and other Auto Router combos from the target selectors, and the runtime independently rejects self-referencing, missing, or Auto Router targets before delegation.
+Auto Router → Auto Router chaining is intentionally unsupported. Runtime validation independently rejects self-references and Auto Router targets before delegation. A per-request re-entry guard remains as defense-in-depth.
 
-A resolver result that proves the target is missing produces the Auto Router configuration error. Unexpected resolver exceptions are allowed to propagate through the normal 9Router error path rather than being incorrectly reported as missing targets.
+### Legacy configuration compatibility
 
-A per-request re-entry guard remains as defense-in-depth.
+Earlier Auto Router releases stored `autoRouter.easyTarget` and `autoRouter.hardTarget`. A patched installation continues using those values until the combo is saved in **Edit Combo**. That save atomically puts those two targets in model positions 1 and 2, preserves models after position 2, and removes the duplicate fields while retaining Advanced settings. This is idempotent and avoids changing routing merely because the former models order differed. Stock 9Router safely ignores the additional `autoRouter` settings during rollback.
 
-### Legacy environment compatibility
-
-Existing deployments can continue using the original environment variables:
+Legacy environment variables remain fallback sources for classifier tuning only:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `AUTO_ROUTER_EASY_TARGET` | `coder` | Easy target |
-| `AUTO_ROUTER_HARD_TARGET` | `coder-high` | Hard target |
 | `AUTO_ROUTER_HARD_THRESHOLD` | `6` | Hard score threshold (`1`–`100`) |
 | `AUTO_ROUTER_LONG_CONTEXT_CHARS` | `24000` | Large-context threshold (`1`–`10000000`) |
 | `AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS` | `12000` | Large tool-output threshold (`1`–`10000000`) |
@@ -397,7 +392,7 @@ Because 9Router ships compiled Next.js assets, the overlay discovers the relevan
 
 Runtime discovery requires the expected 9Router semantic anchors and exactly the expected Fusion dispatch structure. Bindings are associated structurally with their dispatch paths rather than by arbitrary fixed byte windows.
 
-The UI patch similarly validates the expected strategy-selector structure before adding **Auto Router**, target selectors, and Advanced controls.
+The UI patch similarly validates the expected strategy-selector structure before appending **Auto Router**, retaining native strategy persistence, and adding model-order labels with Advanced controls.
 
 If the expected runtime or UI structures cannot be identified unambiguously, the build stops instead of patching an uncertain upstream version.
 
