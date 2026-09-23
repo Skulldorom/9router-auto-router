@@ -157,8 +157,10 @@ test("published GHCR image receives SHA-pinned provenance with least required pe
 test("CI helper containers are digest-pinned", () => {
   const http = fs.readFileSync(path.join(root, "scripts/auto-router-http-test.sh"), "utf8");
   const rollback = fs.readFileSync(path.join(root, "scripts/rollback-compatibility-test.sh"), "utf8");
+  const pipeline = fs.readFileSync(path.join(root, "scripts/auto-router-pipeline-parity-test.sh"), "utf8");
   assert.match(http, /node:22-alpine@sha256:[0-9a-f]{64}/);
   assert.match(rollback, /node:22-alpine@sha256:[0-9a-f]{64}/);
+  assert.match(pipeline, /node:22-alpine@sha256:[0-9a-f]{64}/);
   assert.match(rollback, /mcr\.microsoft\.com\/playwright:v1\.58\.2-noble@sha256:[0-9a-f]{64}/);
   assert.doesNotMatch(http, /node:22-alpine node/);
 });
