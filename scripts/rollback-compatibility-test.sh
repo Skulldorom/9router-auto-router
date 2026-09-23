@@ -151,7 +151,7 @@ const phase = process.env.PHASE;
     const missingEasy = page.getByLabel("Easy target");
     if (await missingEasy.inputValue() !== "removed-easy-target") throw new Error(`${phase} silently replaced a missing Easy target`);
     const missingOption = page.locator('option[value="removed-easy-target"]');
-    if (!await missingOption.isDisabled()) throw new Error(`${phase} missing Easy target did not render as a disabled warning option`);
+    if (await missingOption.getAttribute("disabled") === null) throw new Error(`${phase} missing Easy target did not render as a disabled warning option`);
     await missingEasy.selectOption("coder");
     const replaceMissing = settingsPatch();
     await page.getByRole("button", { name: "Save", exact: true }).click();
