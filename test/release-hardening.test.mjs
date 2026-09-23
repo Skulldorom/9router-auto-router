@@ -120,7 +120,9 @@ test("immutable release tags encode the complete source and upstream identities"
   };
 
   assert.equal(run(revision, firstUpstream).output, `sha-${revision}-upstream-${"b".repeat(64)}`);
+  assert.equal(run(revision, firstUpstream).output, run(revision, firstUpstream).output);
   assert.notEqual(run(revision, firstUpstream).output, run(revision, secondUpstream).output);
+  assert.notEqual(run(revision, firstUpstream).output, run("d".repeat(40), firstUpstream).output);
   assert.equal(run(revision.slice(0, 12), firstUpstream).status, 1);
   assert.equal(run(revision.toUpperCase(), firstUpstream).status, 1);
   assert.equal(run(revision, "sha256:not-a-digest").status, 1);
@@ -137,7 +139,7 @@ test("publication is idempotent for matching immutable tags and fail-closed othe
   assert.match(publication, /\[ "\$existing_revision" != "\$REVISION" \] \|\| \[ "\$existing_upstream" != "\$UPSTREAM_DIGEST" \]/);
   assert.match(publication, /Immutable tag \$\{tag\} already identifies a different image/);
   const immutablePush = publication.indexOf('docker push "$image"');
-  const latestPush = publication.indexOf('docker push "${IMAGE_NAME}:latest"');
+  const latestPush = publication.indexOf('docker buildx imagetools create --tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}@${existing_digest}"');
   assert.ok(immutablePush >= 0 && immutablePush < latestPush);
 });
 
