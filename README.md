@@ -177,6 +177,8 @@ provides much stronger evidence for the hard route.
 
 Available tools are also deliberately weak evidence because agents such as OpenHands may expose a large toolset even for trivial tasks. Actual work history and substantial tool output are stronger signals.
 
+Semantic task phrases are currently primarily English-oriented. Language-independent structural signals—context and history size, tool availability and activity, tool-result size, modalities, and request shape—still apply to every request. Non-English prompts can therefore rely more heavily on structural complexity; adjust the per-combo thresholds and Easy/Hard targets when that better matches your workload.
+
 ### Supported request shapes
 
 Classification reads the current user task from supported request bodies:
@@ -233,13 +235,15 @@ The persisted per-combo configuration looks like:
 
 The **Advanced** controls expose the classifier thresholds:
 
-| Setting | Default | Purpose |
-| --- | ---: | --- |
-| Hard threshold | `6` | Score at which a request becomes hard |
-| Long context | `24000` | Character threshold for large context |
-| Large tool result | `12000` | Character threshold for large tool output |
-| Many tools | `16` | Threshold for unusually large toolsets |
-| Verbose | `false` | Log structural routing metadata without request text |
+| Setting | Default | Supported range | Purpose |
+| --- | ---: | ---: | --- |
+| Hard threshold | `6` | `1`–`100` | Score at which a request becomes hard |
+| Long context | `24000` | `1`–`10000000` | Character threshold for large context |
+| Large tool result | `12000` | `1`–`10000000` | Character threshold for large tool output |
+| Many tools | `16` | `1`–`10000` | Threshold for unusually large toolsets |
+| Verbose | `false` | — | Log structural routing metadata without request text |
+
+The UI restores an invalid saved or typed numeric value to that field's default. Runtime validation uses these same inclusive bounds for persisted configuration and legacy environment fallbacks; out-of-range values fall through to the next configuration source.
 
 Configuration is resolved independently per field in this order:
 
@@ -267,10 +271,10 @@ Existing deployments can continue using the original environment variables:
 | --- | --- | --- |
 | `AUTO_ROUTER_EASY_TARGET` | `coder` | Easy target |
 | `AUTO_ROUTER_HARD_TARGET` | `coder-high` | Hard target |
-| `AUTO_ROUTER_HARD_THRESHOLD` | `6` | Hard score threshold |
-| `AUTO_ROUTER_LONG_CONTEXT_CHARS` | `24000` | Large-context threshold |
-| `AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS` | `12000` | Large tool-output threshold |
-| `AUTO_ROUTER_MANY_TOOLS` | `16` | Large-toolset threshold |
+| `AUTO_ROUTER_HARD_THRESHOLD` | `6` | Hard score threshold (`1`–`100`) |
+| `AUTO_ROUTER_LONG_CONTEXT_CHARS` | `24000` | Large-context threshold (`1`–`10000000`) |
+| `AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS` | `12000` | Large tool-output threshold (`1`–`10000000`) |
+| `AUTO_ROUTER_MANY_TOOLS` | `16` | Large-toolset threshold (`1`–`10000`) |
 | `AUTO_ROUTER_VERBOSE` | `false` | Emit structural metadata, never request text |
 
 These variables are compatibility fallbacks, not the recommended setup path. New installations should use the UI.
@@ -294,15 +298,25 @@ A scheduled compatibility check runs every six hours and only rebuilds when the 
 
 ### Pinning and rollback
 
-For reproducible production deployments, pin the canonical full source revision tag:
+For reproducible production deployments, pin the canonical immutable tag. It identifies both the full Auto Router source revision and the exact upstream manifest digest:
 
 ```yaml
 services:
   9router:
-    image: ghcr.io/skulldorom/9router-auto-router:sha-<full-40-character-auto-router-commit>
+    image: ghcr.io/skulldorom/9router-auto-router:sha-<full-40-character-auto-router-commit>-upstream-<64-character-upstream-digest>
 ```
 
-Short SHA and upstream-version variants are also published, but the full SHA tag is the canonical immutable source identity.
+The tag omits the `sha256:` separator before the upstream digest. Every source-and-upstream pair receives one immutable tag. A retry skips an existing tag only when both image labels match that pair; any mismatch fails closed. `latest` remains the mutable last-known-good pointer and changes only after the immutable image is published, its provenance attestation succeeds, and both source and upstream freshness checks pass.
+
+Each immutable GHCR image also receives a signed SLSA build-provenance attestation. Verify a deployed image with:
+
+```sh
+gh attestation verify \
+  oci://ghcr.io/skulldorom/9router-auto-router@sha256:<published-image-manifest-digest> \
+  --owner Skulldorom
+```
+
+Use the manifest digest reported by `docker buildx imagetools inspect` for the immutable tag. The attestation is bound to that digest, not to mutable `latest`.
 
 To return to stock 9Router, change the image back:
 

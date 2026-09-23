@@ -5,7 +5,7 @@ IMAGE=${1:?Usage: verify-built-image.sh IMAGE [REVISION] [UPSTREAM_DIGEST]}
 EXPECTED_REVISION=${2:-${EXPECTED_REVISION:-}}
 EXPECTED_UPSTREAM_DIGEST=${3:-${EXPECTED_UPSTREAM_DIGEST:-}}
 MARKER=9router-auto-router:v3
-UI_MARKER=9router-auto-router-ui:v4
+UI_MARKER=9router-auto-router-ui:v5
 
 fail() {
   echo "Built image verification failed: $*" >&2
@@ -28,16 +28,17 @@ printf '%s' "$upstream_digest" | grep -Eq '^sha256:[0-9a-f]{64}$' || fail "missi
 
 docker run --rm -i --entrypoint sh "$IMAGE" <<'SH' || fail "runtime overlay or generated UI verification failed"
 set -eu
+[ -f /opt/auto-router-config.cjs ]
 [ -f /opt/9router-auto-router/auto-router.cjs ]
 [ -f /opt/9router-auto-router/apply-patch.mjs ]
 runtime_files=$(grep -RFl "9router-auto-router:v3" /app/.next/server 2>/dev/null || true)
 [ "$(printf "%s\n" "$runtime_files" | sed "/^$/d" | wc -l)" -eq 1 ]
 runtime_file=$(printf "%s\n" "$runtime_files" | sed -n "/./{p;q;}")
 [ "$(grep -o "routeAutoCombo" "$runtime_file" | wc -l)" -eq 2 ]
-ui_files=$(grep -RFl "9router-auto-router-ui:v4" /app/.next 2>/dev/null || true)
+ui_files=$(grep -RFl "9router-auto-router-ui:v5" /app/.next 2>/dev/null || true)
 [ "$(printf "%s\n" "$ui_files" | sed "/^$/d" | wc -l)" -eq 2 ]
 for file in $ui_files; do
-  [ "$(grep -o "9router-auto-router-ui:v4" "$file" | wc -l)" -eq 1 ]
+  [ "$(grep -o "9router-auto-router-ui:v5" "$file" | wc -l)" -eq 1 ]
   [ "$(grep -o "label:\"Auto Router\"" "$file" | wc -l)" -eq 2 ]
   [ "$(grep -o "availableCombos:" "$file" | wc -l)" -eq 2 ]
   [ "$(grep -o "availableCombos:[A-Za-z_$][A-Za-z0-9_$]*\.map(" "$file" | wc -l)" -eq 1 ]

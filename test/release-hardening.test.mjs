@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -32,7 +33,7 @@ test("publish gates latest on both current source and current upstream digest be
   const publish = workflows.find(([file]) => file === "publish.yml")?.[1] || "";
   const freshness = publish.indexOf("Refuse stale source or upstream validation");
   const login = publish.indexOf("Authenticate to GHCR after validation");
-  const publishTags = publish.indexOf("Publish immutable tags, then last-known-good latest");
+  const publishTags = publish.indexOf("Publish immutable image");
   assert.ok(freshness >= 0 && freshness < login && login < publishTags);
   assert.match(publish, /VALIDATED_UPSTREAM_DIGEST: \$\{\{ needs\.validate\.outputs\.upstream_digest \}\}/);
   assert.match(publish, /docker buildx imagetools inspect "\$UPSTREAM_IMAGE"/);
@@ -64,9 +65,9 @@ test("derived image verification precedes every image integration test", () => {
   assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http && http < parity && parity < rollback);
   assert.match(validate, /verify-built-image\.sh "\$\{\{ inputs\.image_tag \}\}" "\$REVISION" "\$UPSTREAM_DIGEST"/);
   const verifier = fs.readFileSync(path.join(root, "scripts/verify-built-image.sh"), "utf8");
-  for (const required of ["auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v4", "Easy target", "Hard target", "Advanced", "org.opencontainers.image.revision", "upstream.digest", "availableCombos:"]) assert.ok(verifier.includes(required));
+  for (const required of ["auto-router-config.cjs", "auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v5", "Easy target", "Hard target", "Advanced", "org.opencontainers.image.revision", "upstream.digest", "availableCombos:"]) assert.ok(verifier.includes(required));
   assert.ok(verifier.includes('grep -o "label:\\"Auto Router\\\"" "$file" | wc -l)" -eq 2'));
-  assert.ok(verifier.includes('grep -o "9router-auto-router-ui:v4" "$file" | wc -l'));
+  assert.ok(verifier.includes('grep -o "9router-auto-router-ui:v5" "$file" | wc -l'));
   for (const modalControl of ["Easy target", "Hard target", "Advanced"]) assert.ok(verifier.includes(`grep -q "${modalControl}" "$file"`));
   assert.match(verifier, /node \/opt\/9router-auto-router\/apply-patch\.mjs \/app --check/);
   assert.doesNotMatch(verifier, /page-hash|app\/dashboard\/combos\/page/);
@@ -91,14 +92,90 @@ test("rollback browser regression attaches stdin, verifies execution markers, an
   assert.match(rollback, /getByRole\("button", \{ name: "Save", exact: true \}\)\.click\(\)/);
   assert.match(rollback, /getByRole\("button", \{ name: "Cancel", exact: true \}\)\.click\(\)/);
   assert.match(rollback, /browser_combos patched-before-auto true/);
+  assert.match(rollback, /getByLabel\(\/Hard threshold\/\)\.inputValue\(\) !== "7"/);
+  assert.match(rollback, /hardThreshold === 7/);
+  assert.match(rollback, /removed-easy-target/);
+  assert.match(rollback, /missing Easy target did not render as a disabled warning option/);
+  assert.match(rollback, /silently replaced a missing Easy target/);
+  assert.doesNotMatch(rollback, /waitForTimeout\(/);
+});
+
+test("browser helper images retain readable versions and immutable digests", () => {
+  const rollback = fs.readFileSync(path.join(root, "scripts/rollback-compatibility-test.sh"), "utf8");
+  assert.match(rollback, /mcr\.microsoft\.com\/playwright:v1\.58\.2-noble@sha256:[0-9a-f]{64}/);
+  assert.match(rollback, /node:22-alpine@sha256:[0-9a-f]{64}/);
+  assert.ok(rollback.includes('"$PLAYWRIGHT_IMAGE"'));
+  assert.ok(rollback.includes('"$NODE_IMAGE"'));
 });
 
 
+test("immutable release tags encode the complete source and upstream identities", () => {
+  const tagScript = path.join(root, "scripts/derive-image-tag.sh");
+  const revision = "a".repeat(40);
+  const firstUpstream = `sha256:${"b".repeat(64)}`;
+  const secondUpstream = `sha256:${"c".repeat(64)}`;
+  const run = (source, upstream) => {
+    const result = childProcess.spawnSync("sh", [tagScript, source, upstream], { encoding: "utf8" });
+    return { status: result.status, output: result.stdout.trim(), error: result.stderr };
+  };
+
+  assert.equal(run(revision, firstUpstream).output, `sha-${revision}-upstream-${"b".repeat(64)}`);
+  assert.equal(run(revision, firstUpstream).output, run(revision, firstUpstream).output);
+  assert.notEqual(run(revision, firstUpstream).output, run(revision, secondUpstream).output);
+  assert.notEqual(run(revision, firstUpstream).output, run("d".repeat(40), firstUpstream).output);
+  assert.equal(run(revision.slice(0, 12), firstUpstream).status, 1);
+  assert.equal(run(revision.toUpperCase(), firstUpstream).status, 1);
+  assert.equal(run(revision, "sha256:not-a-digest").status, 1);
+});
+
+test("publication is idempotent for matching immutable tags and fail-closed otherwise", () => {
+  const publish = workflows.find(([file]) => file === "publish.yml")?.[1] || "";
+  const publication = publish.slice(publish.indexOf("Publish immutable image"));
+  assert.match(publication, /tag=\$\(\.\/scripts\/derive-image-tag\.sh "\$REVISION" "\$UPSTREAM_DIGEST"\)/);
+  assert.match(publication, /existing_digest=.*imagetools inspect --format '\{\{json \.\}\}'/);
+  assert.match(publication, /if \[ -n "\$existing_digest" \]; then/);
+  assert.match(publication, /existing_revision.*org\.opencontainers\.image\.revision/);
+  assert.match(publication, /existing_upstream.*upstream\.digest/);
+  assert.match(publication, /\[ "\$existing_revision" != "\$REVISION" \] \|\| \[ "\$existing_upstream" != "\$UPSTREAM_DIGEST" \]/);
+  assert.match(publication, /Immutable tag \$\{tag\} already identifies a different image/);
+  const immutablePush = publication.indexOf('docker push "$image"');
+  const attest = publication.indexOf("uses: actions/attest-build-provenance");
+  const latestPush = publication.indexOf('docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}@${DIGEST}"');
+  assert.ok(immutablePush >= 0, "the immutable image must be pushed");
+  assert.ok(attest >= 0, "provenance attestation must run");
+  assert.ok(latestPush >= 0, "latest must be promoted from the immutable digest");
+  assert.ok(immutablePush < attest, "immutable publication must precede attestation");
+  assert.ok(attest < latestPush, "latest must only advance after attestation succeeds");
+  assert.match(publication, /DIGEST: \$\{\{ steps\.publish\.outputs\.digest \}\}/);
+});
+
+test("published GHCR image receives SHA-pinned provenance with least required permissions", () => {
+  const publish = workflows.find(([file]) => file === "publish.yml")?.[1] || "";
+  assert.match(publish, /attestations: write/);
+  assert.match(publish, /id-token: write/);
+  assert.match(publish, /packages: write/);
+  assert.match(publish, /actions\/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2\.4\.0/);
+  assert.match(publish, /subject-name: \$\{\{ steps\.publish\.outputs\.image \}\}/);
+  assert.match(publish, /subject-digest: \$\{\{ steps\.publish\.outputs\.digest \}\}/);
+  assert.match(publish, /push-to-registry: true/);
+});
+
+test("CI helper containers are digest-pinned", () => {
+  const http = fs.readFileSync(path.join(root, "scripts/auto-router-http-test.sh"), "utf8");
+  const rollback = fs.readFileSync(path.join(root, "scripts/rollback-compatibility-test.sh"), "utf8");
+  const pipeline = fs.readFileSync(path.join(root, "scripts/auto-router-pipeline-parity-test.sh"), "utf8");
+  assert.match(http, /node:22-alpine@sha256:[0-9a-f]{64}/);
+  assert.match(rollback, /node:22-alpine@sha256:[0-9a-f]{64}/);
+  assert.match(pipeline, /node:22-alpine@sha256:[0-9a-f]{64}/);
+  assert.match(rollback, /mcr\.microsoft\.com\/playwright:v1\.58\.2-noble@sha256:[0-9a-f]{64}/);
+  assert.doesNotMatch(http, /node:22-alpine node/);
+});
+
 test("lint blocks warnings and restricts CommonJS globals to runtime code", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.match(manifest.scripts.lint, /eslint eslint\.config\.js src patches test --max-warnings=0/);
+  assert.match(manifest.scripts.lint, /eslint eslint\.config\.js auto-router-config\.cjs src patches test --max-warnings=0/);
   const config = fs.readFileSync(path.join(root, "eslint.config.js"), "utf8");
   assert.match(config, /files: \["eslint\.config\.js", "patches\/\*\*\/\*\.mjs", "test\/\*\*\/\*\.mjs"\]/);
-  assert.match(config, /files: \["src\/\*\*\/\*\.cjs"\]/);
+  assert.match(config, /files: \["auto-router-config\.cjs", "src\/\*\*\/\*\.cjs"\]/);
   assert.match(config, /sourceType: "commonjs"/);
 });

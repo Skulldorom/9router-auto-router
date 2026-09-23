@@ -70,9 +70,12 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: read
+      id-token: write
       packages: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: validated-image
@@ -105,35 +108,47 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish immutable tags, then last-known-good latest
+      - name: Publish immutable image
         if: steps.current.outputs.publish == 'true'
+        id: publish
         env:
           REVISION: ${{ needs.validate.outputs.revision }}
           UPSTREAM_DIGEST: ${{ needs.validate.outputs.upstream_digest }}
-          UPSTREAM_VERSION: ${{ needs.validate.outputs.upstream_version }}
         run: |
           set -eu
-          short_revision=$(printf '%s' "$REVISION" | cut -c1-12)
-          tags="sha-${REVISION} sha-${short_revision}"
-          if [ "$UPSTREAM_VERSION" != unknown ]; then
-            tags="$tags 9router-${UPSTREAM_VERSION}-sha-${REVISION} 9router-${UPSTREAM_VERSION}-sha-${short_revision}"
-          fi
-          for tag in $tags; do
-            existing=$(docker buildx imagetools inspect "${IMAGE_NAME}:${tag}" 2>/dev/null || true)
-            if [ -n "$existing" ]; then
-              existing_revision=$(printf '%s\n' "$existing" | sed -n 's/^[[:space:]]*org.opencontainers.image.revision:[[:space:]]*//p' | head -n1)
-              existing_upstream=$(printf '%s\n' "$existing" | sed -n 's/^[[:space:]]*io.github.skulldorom.9router-auto-router.upstream.digest:[[:space:]]*//p' | head -n1)
-              if [ "$existing_revision" != "$REVISION" ] || [ "$existing_upstream" != "$UPSTREAM_DIGEST" ]; then
-                echo "Immutable tag ${tag} already identifies a different image." >&2
-                exit 1
-              fi
-            else
-              docker tag 9router-auto-router:validated "${IMAGE_NAME}:${tag}"
-              docker push "${IMAGE_NAME}:${tag}"
+          tag=$(./scripts/derive-image-tag.sh "$REVISION" "$UPSTREAM_DIGEST")
+          image="${IMAGE_NAME}:${tag}"
+          existing_digest=$(docker buildx imagetools inspect --format '{{json .}}' "$image" 2>/dev/null | sed -n 's/.*"digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | head -n1 || true)
+          if [ -n "$existing_digest" ]; then
+            existing_revision=$(docker buildx imagetools inspect "$image" | sed -n 's/^[[:space:]]*org.opencontainers.image.revision:[[:space:]]*//p' | head -n1)
+            existing_upstream=$(docker buildx imagetools inspect "$image" | sed -n 's/^[[:space:]]*io.github.skulldorom.9router-auto-router.upstream.digest:[[:space:]]*//p' | head -n1)
+            if [ "$existing_revision" != "$REVISION" ] || [ "$existing_upstream" != "$UPSTREAM_DIGEST" ]; then
+              echo "Immutable tag ${tag} already identifies a different image." >&2
+              exit 1
             fi
-          done
-          docker tag 9router-auto-router:validated "${IMAGE_NAME}:latest"
-          docker push "${IMAGE_NAME}:latest"
+          else
+            docker tag 9router-auto-router:validated "$image"
+            docker push "$image"
+            existing_digest=$(docker buildx imagetools inspect --format '{{json .}}' "$image" | sed -n 's/.*"digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | head -n1)
+          fi
+          test -n "$existing_digest"
+          printf 'image=%s\ndigest=%s\n' "$IMAGE_NAME" "$existing_digest" >> "$GITHUB_OUTPUT"
+      - name: Attest published image provenance
+        if: steps.current.outputs.publish == 'true'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-name: ${{ steps.publish.outputs.image }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+      - name: Promote attested image to latest
+        if: steps.current.outputs.publish == 'true'
+        env:
+          IMAGE: ${{ steps.publish.outputs.image }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -eu
+          [ -n "$DIGEST" ]
+          docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}@${DIGEST}"
       - name: Make the package public when repository settings permit
         if: steps.current.outputs.publish == 'true'
         env:
