@@ -71,6 +71,33 @@ test("canonical populated request shapes have identical semantic isolation", () 
   for (const body of shapes) assert.equal(classifyTaskComplexity(body).level, "easy");
   for (const body of [{ messages: [] }, { input: [] }, { contents: [] }, { messages: [], input: [], contents: [] }]) assert.equal(classifyTaskComplexity(body).level, "hard");
 });
+
+test("nested request wrappers use their canonical tool or function collection", () => {
+  const easy = { request: { messages: [{ role: "user", content: "Rename one label." }], tools: [{ type: "function" }] }, tools: Array.from({ length: 32 }, () => ({ type: "function" })) };
+  const functions = { request: { messages: [{ role: "user", content: "Rename one label." }], functions: Array.from({ length: 16 }, () => ({ name: "legacy" })) }, functions: [] };
+  const outerOnly = { request: { messages: [{ role: "user", content: "Rename one label." }] }, tools: Array.from({ length: 32 }, () => ({ type: "function" })) };
+  assert.equal(classifyTaskComplexity(easy).metadata.tools, 1);
+  assert.equal(classifyTaskComplexity(easy).level, "easy");
+  assert.equal(classifyTaskComplexity(functions).metadata.tools, 16);
+  assert.ok(classifyTaskComplexity(functions).reasons.includes("large-toolset"));
+  assert.equal(classifyTaskComplexity(outerOnly).metadata.tools, 0);
+});
+
+test("numeric configuration accepts documented boundaries and rejects adjacent values", () => {
+  const fields = Object.entries(router.NUMERIC_BOUNDS);
+  const explicit = Object.fromEntries(fields.map(([key, bounds]) => [key, bounds.max]));
+  assert.deepEqual(router.getConfig({}, explicit), { ...router.DEFAULTS, ...explicit });
+
+  for (const [key, { min, max }] of fields) {
+    const environment = { [`AUTO_ROUTER_${key.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()}`]: String(max) };
+    assert.equal(router.getConfig(environment, { [key]: min })[key], min, `${key} minimum`);
+    assert.equal(router.getConfig(environment, { [key]: max })[key], max, `${key} maximum`);
+    assert.equal(router.getConfig(environment, { [key]: min - 1 })[key], max, `${key} below minimum falls through`);
+    assert.equal(router.getConfig(environment, { [key]: max + 1 })[key], max, `${key} above maximum falls through`);
+    assert.equal(router.getConfig({ ...environment, [Object.keys(environment)[0]]: String(max + 1) }, { [key]: min - 1 })[key], router.DEFAULTS[key], `${key} invalid sources use default`);
+  }
+});
+
 test("realistic OpenHands toolset does not make a simple request hard", () => {
   const body = harness("Rename this variable in src/foo.js");
   const result = classifyTaskComplexity(body);

@@ -235,13 +235,15 @@ The persisted per-combo configuration looks like:
 
 The **Advanced** controls expose the classifier thresholds:
 
-| Setting | Default | Purpose |
-| --- | ---: | --- |
-| Hard threshold | `6` | Score at which a request becomes hard |
-| Long context | `24000` | Character threshold for large context |
-| Large tool result | `12000` | Character threshold for large tool output |
-| Many tools | `16` | Threshold for unusually large toolsets |
-| Verbose | `false` | Log structural routing metadata without request text |
+| Setting | Default | Supported range | Purpose |
+| --- | ---: | ---: | --- |
+| Hard threshold | `6` | `1`–`100` | Score at which a request becomes hard |
+| Long context | `24000` | `1`–`10000000` | Character threshold for large context |
+| Large tool result | `12000` | `1`–`10000000` | Character threshold for large tool output |
+| Many tools | `16` | `1`–`10000` | Threshold for unusually large toolsets |
+| Verbose | `false` | — | Log structural routing metadata without request text |
+
+The UI restores an invalid saved or typed numeric value to that field's default. Runtime validation uses these same inclusive bounds for persisted configuration and legacy environment fallbacks; out-of-range values fall through to the next configuration source.
 
 Configuration is resolved independently per field in this order:
 
@@ -269,10 +271,10 @@ Existing deployments can continue using the original environment variables:
 | --- | --- | --- |
 | `AUTO_ROUTER_EASY_TARGET` | `coder` | Easy target |
 | `AUTO_ROUTER_HARD_TARGET` | `coder-high` | Hard target |
-| `AUTO_ROUTER_HARD_THRESHOLD` | `6` | Hard score threshold |
-| `AUTO_ROUTER_LONG_CONTEXT_CHARS` | `24000` | Large-context threshold |
-| `AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS` | `12000` | Large tool-output threshold |
-| `AUTO_ROUTER_MANY_TOOLS` | `16` | Large-toolset threshold |
+| `AUTO_ROUTER_HARD_THRESHOLD` | `6` | Hard score threshold (`1`–`100`) |
+| `AUTO_ROUTER_LONG_CONTEXT_CHARS` | `24000` | Large-context threshold (`1`–`10000000`) |
+| `AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS` | `12000` | Large tool-output threshold (`1`–`10000000`) |
+| `AUTO_ROUTER_MANY_TOOLS` | `16` | Large-toolset threshold (`1`–`10000`) |
 | `AUTO_ROUTER_VERBOSE` | `false` | Emit structural metadata, never request text |
 
 These variables are compatibility fallbacks, not the recommended setup path. New installations should use the UI.

@@ -29,7 +29,7 @@ export default [
     rules,
   },
   {
-    files: ["src/**/*.cjs"],
+    files: ["auto-router-config.cjs", "src/**/*.cjs"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "commonjs",

@@ -65,9 +65,9 @@ test("derived image verification precedes every image integration test", () => {
   assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http && http < parity && parity < rollback);
   assert.match(validate, /verify-built-image\.sh "\$\{\{ inputs\.image_tag \}\}" "\$REVISION" "\$UPSTREAM_DIGEST"/);
   const verifier = fs.readFileSync(path.join(root, "scripts/verify-built-image.sh"), "utf8");
-  for (const required of ["auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v4", "Easy target", "Hard target", "Advanced", "org.opencontainers.image.revision", "upstream.digest", "availableCombos:"]) assert.ok(verifier.includes(required));
+  for (const required of ["auto-router-config.cjs", "auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v5", "Easy target", "Hard target", "Advanced", "org.opencontainers.image.revision", "upstream.digest", "availableCombos:"]) assert.ok(verifier.includes(required));
   assert.ok(verifier.includes('grep -o "label:\\"Auto Router\\\"" "$file" | wc -l)" -eq 2'));
-  assert.ok(verifier.includes('grep -o "9router-auto-router-ui:v4" "$file" | wc -l'));
+  assert.ok(verifier.includes('grep -o "9router-auto-router-ui:v5" "$file" | wc -l'));
   for (const modalControl of ["Easy target", "Hard target", "Advanced"]) assert.ok(verifier.includes(`grep -q "${modalControl}" "$file"`));
   assert.match(verifier, /node \/opt\/9router-auto-router\/apply-patch\.mjs \/app --check/);
   assert.doesNotMatch(verifier, /page-hash|app\/dashboard\/combos\/page/);
@@ -164,9 +164,9 @@ test("CI helper containers are digest-pinned", () => {
 
 test("lint blocks warnings and restricts CommonJS globals to runtime code", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.match(manifest.scripts.lint, /eslint eslint\.config\.js src patches test --max-warnings=0/);
+  assert.match(manifest.scripts.lint, /eslint eslint\.config\.js auto-router-config\.cjs src patches test --max-warnings=0/);
   const config = fs.readFileSync(path.join(root, "eslint.config.js"), "utf8");
   assert.match(config, /files: \["eslint\.config\.js", "patches\/\*\*\/\*\.mjs", "test\/\*\*\/\*\.mjs"\]/);
-  assert.match(config, /files: \["src\/\*\*\/\*\.cjs"\]/);
+  assert.match(config, /files: \["auto-router-config\.cjs", "src\/\*\*\/\*\.cjs"\]/);
   assert.match(config, /sourceType: "commonjs"/);
 });

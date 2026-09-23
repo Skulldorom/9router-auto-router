@@ -1,5 +1,7 @@
 "use strict";
 
+const { DEFAULTS, NUMERIC_BOUNDS } = require("../auto-router-config.cjs");
+
 // Weak domain nouns ("security", "authentication", "permissions") and structural
 // change nouns ("architecture", "migration") are common as labels, e.g.
 // 'Rename the "Authentication" menu item'. They only contribute when the same user
@@ -51,20 +53,18 @@ const MAX_HISTORICAL_SEMANTIC_SCORE = 4;
 const GATED_WEIGHT = 6;
 const WEAK_WEIGHT = 3;
 const activeAutoCombos = new WeakMap();
-const DEFAULTS = Object.freeze({ easyTarget: "coder", hardTarget: "coder-high", hardThreshold: 6, longContextChars: 24000, largeToolResultChars: 12000, manyTools: 16, verbose: false });
 const TEXT_FIELDS = new Set(["text", "content", "input_text", "output_text", "arguments", "output"]);
 const USER_TEXT_FIELDS = new Set(["text", "content", "input_text"]);
 const PART_FIELDS = new Set(["content", "parts", "input"]);
 const MODALITY_TYPES = new Set(["image_url", "input_image", "input_file", "file", "document", "input_audio", "input_video"]);
 
-function positiveInt(value, fallback) {
+function validBoundedInt(value, bounds) { return Number.isSafeInteger(value) && value >= bounds.min && value <= bounds.max ? value : null; }
+function positiveInt(value, bounds, fallback) {
   if (typeof value !== "string" || !/^\s*[1-9]\d*\s*$/.test(value)) return fallback;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : fallback;
+  return validBoundedInt(Number(value), bounds) ?? fallback;
 }
 
 function nonEmptyString(value) { return typeof value === "string" && value.trim() ? value.trim() : null; }
-function validPositiveInt(value) { return Number.isSafeInteger(value) && value > 0 ? value : null; }
 function booleanValue(value) {
   if (value === true || value === false) return value;
   if (typeof value !== "string") return null;
@@ -72,7 +72,7 @@ function booleanValue(value) {
   return normalized === "true" ? true : normalized === "false" ? false : null;
 }
 function configuredString(explicit, key, legacy, fallback) { return nonEmptyString(explicit[key]) || nonEmptyString(legacy) || fallback; }
-function configuredPositiveInt(explicit, key, legacy, fallback) { return validPositiveInt(explicit[key]) || positiveInt(legacy, fallback); }
+function configuredPositiveInt(explicit, key, legacy, fallback) { return validBoundedInt(explicit[key], NUMERIC_BOUNDS[key]) || positiveInt(legacy, NUMERIC_BOUNDS[key], fallback); }
 function configuredBoolean(explicit, key, legacy, fallback) { return booleanValue(explicit[key]) ?? booleanValue(legacy) ?? fallback; }
 
 function getConfig(env = process.env, explicit = {}) {
@@ -142,9 +142,12 @@ function userText(value, seen = new Set()) {
   }
   return text;
 }
-function requestCollections(body) {
+function requestSource(body) {
   const nested = own(body, "request");
-  const source = nested && typeof nested === "object" ? nested : body;
+  return nested && typeof nested === "object" && !Array.isArray(nested) ? nested : body;
+}
+function requestCollections(body) {
+  const source = requestSource(body);
   // Adapters can preserve an original request beside a normalized translation. Those
   // fields describe one conversation, not additive conversations. Prefer the native
   // OpenAI Chat shape, then OpenAI Responses input (including its string form), then
@@ -184,7 +187,10 @@ function inspectRequest(body) {
   }
   return state;
 }
-function normalizeTools(body) { return Array.isArray(own(body, "tools")) ? own(body, "tools") : Array.isArray(own(body, "functions")) ? own(body, "functions") : []; }
+function normalizeTools(body) {
+  const source = requestSource(body);
+  return Array.isArray(own(source, "tools")) ? own(source, "tools") : Array.isArray(own(source, "functions")) ? own(source, "functions") : [];
+}
 function addIntentChunk(tokens, chunk, quoted) {
   const normalized = chunk.toLocaleLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
   if (!normalized) return;
@@ -369,4 +375,4 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   }
 }
 
-module.exports = { DEFAULTS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget };
+module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget };
