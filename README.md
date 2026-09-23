@@ -296,15 +296,25 @@ A scheduled compatibility check runs every six hours and only rebuilds when the 
 
 ### Pinning and rollback
 
-For reproducible production deployments, pin the canonical full source revision tag:
+For reproducible production deployments, pin the canonical immutable tag. It identifies both the full Auto Router source revision and the exact upstream manifest digest:
 
 ```yaml
 services:
   9router:
-    image: ghcr.io/skulldorom/9router-auto-router:sha-<full-40-character-auto-router-commit>
+    image: ghcr.io/skulldorom/9router-auto-router:sha-<full-40-character-auto-router-commit>-upstream-<64-character-upstream-digest>
 ```
 
-Short SHA and upstream-version variants are also published, but the full SHA tag is the canonical immutable source identity.
+The tag omits the `sha256:` separator before the upstream digest. Every source-and-upstream pair receives one immutable tag. A retry skips an existing tag only when both image labels match that pair; any mismatch fails closed. `latest` remains the mutable last-known-good pointer and changes only after the immutable image is published and both source and upstream freshness checks pass.
+
+Each immutable GHCR image also receives a signed SLSA build-provenance attestation. Verify a deployed image with:
+
+```sh
+gh attestation verify \
+  oci://ghcr.io/skulldorom/9router-auto-router@sha256:<published-image-manifest-digest> \
+  --owner Skulldorom
+```
+
+Use the manifest digest reported by `docker buildx imagetools inspect` for the immutable tag. The attestation is bound to that digest, not to mutable `latest`.
 
 To return to stock 9Router, change the image back:
 

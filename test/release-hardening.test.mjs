@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -32,7 +33,7 @@ test("publish gates latest on both current source and current upstream digest be
   const publish = workflows.find(([file]) => file === "publish.yml")?.[1] || "";
   const freshness = publish.indexOf("Refuse stale source or upstream validation");
   const login = publish.indexOf("Authenticate to GHCR after validation");
-  const publishTags = publish.indexOf("Publish immutable tags, then last-known-good latest");
+  const publishTags = publish.indexOf("Publish immutable tag, then last-known-good latest");
   assert.ok(freshness >= 0 && freshness < login && login < publishTags);
   assert.match(publish, /VALIDATED_UPSTREAM_DIGEST: \$\{\{ needs\.validate\.outputs\.upstream_digest \}\}/);
   assert.match(publish, /docker buildx imagetools inspect "\$UPSTREAM_IMAGE"/);
@@ -107,6 +108,59 @@ test("browser helper images retain readable versions and immutable digests", () 
   assert.ok(rollback.includes('"$NODE_IMAGE"'));
 });
 
+
+test("immutable release tags encode the complete source and upstream identities", () => {
+  const tagScript = path.join(root, "scripts/derive-image-tag.sh");
+  const revision = "a".repeat(40);
+  const firstUpstream = `sha256:${"b".repeat(64)}`;
+  const secondUpstream = `sha256:${"c".repeat(64)}`;
+  const run = (source, upstream) => {
+    const result = childProcess.spawnSync("sh", [tagScript, source, upstream], { encoding: "utf8" });
+    return { status: result.status, output: result.stdout.trim(), error: result.stderr };
+  };
+
+  assert.equal(run(revision, firstUpstream).output, `sha-${revision}-upstream-${"b".repeat(64)}`);
+  assert.notEqual(run(revision, firstUpstream).output, run(revision, secondUpstream).output);
+  assert.equal(run(revision.slice(0, 12), firstUpstream).status, 1);
+  assert.equal(run(revision.toUpperCase(), firstUpstream).status, 1);
+  assert.equal(run(revision, "sha256:not-a-digest").status, 1);
+});
+
+test("publication is idempotent for matching immutable tags and fail-closed otherwise", () => {
+  const publish = workflows.find(([file]) => file === "publish.yml")?.[1] || "";
+  const publication = publish.slice(publish.indexOf("Publish immutable tag, then last-known-good latest"));
+  assert.match(publication, /tag=\$\(\.\/scripts\/derive-image-tag\.sh "\$REVISION" "\$UPSTREAM_DIGEST"\)/);
+  assert.match(publication, /existing_digest=.*imagetools inspect --format '\{\{json \.\}\}'/);
+  assert.match(publication, /if \[ -n "\$existing_digest" \]; then/);
+  assert.match(publication, /existing_revision.*org\.opencontainers\.image\.revision/);
+  assert.match(publication, /existing_upstream.*upstream\.digest/);
+  assert.match(publication, /\[ "\$existing_revision" != "\$REVISION" \] \|\| \[ "\$existing_upstream" != "\$UPSTREAM_DIGEST" \]/);
+  assert.match(publication, /Immutable tag \$\{tag\} already identifies a different image/);
+  const immutablePush = publication.indexOf('docker push "$image"');
+  const latestPush = publication.indexOf('docker push "${IMAGE_NAME}:latest"');
+  assert.ok(immutablePush >= 0 && immutablePush < latestPush);
+});
+
+test("published GHCR image receives SHA-pinned provenance with least required permissions", () => {
+  const publish = workflows.find(([file]) => file === "publish.yml")?.[1] || "";
+  assert.match(publish, /attestations: write/);
+  assert.match(publish, /id-token: write/);
+  assert.match(publish, /packages: write/);
+  assert.match(publish, /actions\/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2\.4\.0/);
+  assert.match(publish, /subject-name: \$\{\{ steps\.publish\.outputs\.image \}\}/);
+  assert.match(publish, /subject-digest: \$\{\{ steps\.publish\.outputs\.digest \}\}/);
+  assert.match(publish, /push-to-registry: true/);
+});
+
+test("CI helper containers are digest-pinned", () => {
+  const http = fs.readFileSync(path.join(root, "scripts/auto-router-http-test.sh"), "utf8");
+  const rollback = fs.readFileSync(path.join(root, "scripts/rollback-compatibility-test.sh"), "utf8");
+  assert.match(http, /node:22-alpine@sha256:[0-9a-f]{64}/);
+  assert.match(rollback, /node:22-alpine@sha256:[0-9a-f]{64}/);
+  assert.match(rollback, /mcr\.microsoft\.com\/playwright@sha256:[0-9a-f]{64}/);
+  assert.doesNotMatch(http, /node:22-alpine node/);
+  assert.doesNotMatch(rollback, /playwright:v1\.58\.2-noble/);
+});
 
 test("lint blocks warnings and restricts CommonJS globals to runtime code", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));

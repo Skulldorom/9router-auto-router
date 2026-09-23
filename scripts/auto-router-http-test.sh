@@ -50,7 +50,7 @@ NODE
 chmod 644 "${MOCK_DIR}/server.cjs"
 
 docker network create "$NETWORK" >/dev/null
-docker run -d --name "$MOCK_NAME" --network "$NETWORK" -v "${MOCK_DIR}:/journal" -w /journal node:22-alpine node /journal/server.cjs >/dev/null
+docker run -d --name "$MOCK_NAME" --network "$NETWORK" -v "${MOCK_DIR}:/journal" -w /journal node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 node /journal/server.cjs >/dev/null
 docker run -d --name "$NAME" --network "$NETWORK" -v "${DATA_DIR}:/app/data" -e NODE_ENV=production -e INITIAL_PASSWORD="$PASSWORD" -p 127.0.0.1::20128 "$IMAGE" >/dev/null
 PORT=$(docker port "$NAME" 20128/tcp | sed 's/.*://')
 if ! wait_for_login "http://127.0.0.1:${PORT}/api/auth/login" "$COOKIE_JAR" "$PASSWORD" 60; then
