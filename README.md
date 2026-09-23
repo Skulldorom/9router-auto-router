@@ -177,6 +177,8 @@ provides much stronger evidence for the hard route.
 
 Available tools are also deliberately weak evidence because agents such as OpenHands may expose a large toolset even for trivial tasks. Actual work history and substantial tool output are stronger signals.
 
+Semantic task phrases are currently primarily English-oriented. Language-independent structural signals—context and history size, tool availability and activity, tool-result size, modalities, and request shape—still apply to every request. Non-English prompts can therefore rely more heavily on structural complexity; adjust the per-combo thresholds and Easy/Hard targets when that better matches your workload.
+
 ### Supported request shapes
 
 Classification reads the current user task from supported request bodies:
