@@ -192,8 +192,20 @@ test("badge-state publication is fail-closed against a newer main and never rewr
   assert.match(publish, /git push origin HEAD:main --force-with-lease=refs\/heads\/main:"\$VALIDATED_REVISION"/);
   assert.doesNotMatch(publish, /git push origin HEAD:main\s*$/m);
   assert.doesNotMatch(publish, /--force(?![-\w])/);
-  assert.match(publish, /Refusing to push badge state: origin\/main/);
   assert.match(publish, /git diff --cached --quiet -- \.github\/badges/);
+
+  // A stale run skips instead of failing, so a later production run owns the badge
+  // state. The push step re-runs the same tested guard against a private output file
+  // rather than trusting the earlier verdict or hand-rolled `git rev-parse` shell.
+  const publishStep = publish.slice(push);
+  assert.match(publishStep, /node scripts\/badge-state-guard\.mjs \\\n\s+--validated-revision "\$VALIDATED_REVISION" \\\n\s+--known-good-revision "\$VALIDATED_REVISION"/);
+  assert.match(publishStep, /--github-output "\$recheck"/);
+  assert.match(publishStep, /grep -qx 'skip=true' "\$recheck"/);
+  assert.match(publishStep, /exit 0/);
+  assert.doesNotMatch(publishStep, /exit 1/);
+  // The ownership step must read the guard's verdict without shadowing GITHUB_OUTPUT.
+  assert.doesNotMatch(publish, /skip=\$\(grep/);
+  assert.doesNotMatch(publish, /lease=\$\(git rev-parse FETCH_HEAD\)/);
 
   const guardScript = fs.readFileSync(path.join(root, "scripts/badge-state-guard.mjs"), "utf8");
   assert.match(guardScript, /ls-remote/);

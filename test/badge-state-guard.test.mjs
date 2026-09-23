@@ -173,3 +173,69 @@ test("the CLI exits successfully and reports skip through GITHUB_OUTPUT", () => 
     fs.rmSync(env.root, { recursive: true, force: true });
   }
 });
+
+// The workflow reads the verdict with `grep -m1 '^skip='`, so it must be the first
+// `skip=` line the guard appends. A second or unqualified line would let a stale
+// verdict leak into the push decision.
+test("the guard reports exactly one unambiguous skip verdict", () => {
+  const env = makeRemote();
+  const output = path.join(env.root, "output.txt");
+  fs.writeFileSync(output, "unrelated=value\n");
+  try {
+    const result = childProcess.spawnSync(
+      process.execPath,
+      [
+        path.join(REPO, "scripts/badge-state-guard.mjs"),
+        "--validated-revision", env.first,
+        "--known-good-revision", env.first,
+        "--github-output", output,
+      ],
+      { cwd: env.work, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /still owns badge state/);
+    const text = fs.readFileSync(output, "utf8");
+    assert.deepEqual(text.split("\n").filter((line) => line.startsWith("skip=")), ["skip=false"]);
+    assert.equal(text.split("\n").filter((line) => line.startsWith("skip=")).length, 1);
+  } finally {
+    fs.rmSync(env.root, { recursive: true, force: true });
+  }
+});
+
+test("badge state pushes as a fast-forward on top of the validated revision", () => {
+  const env = makeRemote();
+  try {
+    fs.writeFileSync(path.join(env.work, "badges.json"), "{}\n");
+    const badgeCommit = commit(env.work, "badge state");
+    git(env.work, [
+      "push", "-q", "origin", "HEAD:main",
+      `--force-with-lease=refs/heads/main:${env.first}`,
+    ]);
+    const [tip] = git(env.work, ["ls-remote", "origin", "refs/heads/main"]).trim().split(/\s+/);
+    assert.equal(tip, badgeCommit);
+  } finally {
+    fs.rmSync(env.root, { recursive: true, force: true });
+  }
+});
+
+// Belt-and-braces behind the guard: even if a newer commit lands in the window
+// between the re-check and the push, the lease must refuse and `main` must stay on
+// the newer revision rather than receiving generated state for an older run.
+test("a badge push fails closed when main advances after the re-check", () => {
+  const env = makeRemote();
+  try {
+    const second = advanceMain(env);
+    fs.writeFileSync(path.join(env.work, "badges.json"), "{}\n");
+    commit(env.work, "badge state");
+    const push = childProcess.spawnSync(
+      "git",
+      ["push", "origin", "HEAD:main", `--force-with-lease=refs/heads/main:${env.first}`],
+      { cwd: env.work, encoding: "utf8" },
+    );
+    assert.notEqual(push.status, 0);
+    const [tip] = git(env.work, ["ls-remote", "origin", "refs/heads/main"]).trim().split(/\s+/);
+    assert.equal(tip, second);
+  } finally {
+    fs.rmSync(env.root, { recursive: true, force: true });
+  }
+});

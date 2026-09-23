@@ -344,8 +344,7 @@ jobs:
             --validated-revision "$VALIDATED_REVISION" \
             --known-good-revision "$KNOWN_GOOD_REVISION" \
             --github-output "$GITHUB_OUTPUT"
-          skip=$(grep -m1 '^skip=' "$GITHUB_OUTPUT" | cut -d= -f2)
-          if [ "$skip" = "true" ]; then
+          if [ "$(grep -m1 '^skip=' "$GITHUB_OUTPUT" | cut -d= -f2)" = "true" ]; then
             echo "Badge state skipped: this run no longer owns main." >&2
           fi
       - name: Update known-good version badge state
@@ -369,20 +368,27 @@ jobs:
           git commit -m "chore: record known-good versions auto-router v${AUTO_ROUTER_VERSION} / 9router v${UPSTREAM_VERSION}"
           echo 'commit=true' >> "$GITHUB_OUTPUT"
       # Even though the guard above re-checks ownership, a commit could still land in
-      # the small window between the guard and this push. `--force-with-lease` pins the
-      # expected remote tip, so a non-fast-forward push fails loudly instead of moving
-      # `main`, and it never rewrites a newer commit.
+      # the small window between the guard and this push. Re-run the same tested guard
+      # here and skip rather than fail: a stale run must exit successfully so the newer
+      # production run records current badge state, and it must never modify `main`.
+      # `--force-with-lease` pins the expected remote tip as a final fail-closed
+      # backstop, so a non-fast-forward push can never move `main` or rewrite a newer
+      # commit.
       - name: Publish badge state as a fast-forward of validated source
         if: steps.badge-commit.outputs.commit == 'true'
         env:
           VALIDATED_REVISION: ${{ needs.validate.outputs.revision }}
         run: |
           set -eu
-          git fetch --quiet origin main
-          lease=$(git rev-parse FETCH_HEAD)
-          if [ "$lease" != "$VALIDATED_REVISION" ]; then
-            echo "Refusing to push badge state: origin/main (${lease}) no longer matches validated ${VALIDATED_REVISION}." >&2
-            exit 1
+          recheck="${RUNNER_TEMP}/badge-state-recheck.txt"
+          node scripts/badge-state-guard.mjs \
+            --validated-revision "$VALIDATED_REVISION" \
+            --known-good-revision "$VALIDATED_REVISION" \
+            --github-output "$recheck"
+          if grep -qx 'skip=true' "$recheck"; then
+            echo "Skipping badge state: origin/main no longer matches validated ${VALIDATED_REVISION}." >&2
+            echo "The newer production run owns current badge state." >&2
+            exit 0
           fi
           git push origin HEAD:main --force-with-lease=refs/heads/main:"$VALIDATED_REVISION"
 
