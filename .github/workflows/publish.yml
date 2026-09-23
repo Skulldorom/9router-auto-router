@@ -108,7 +108,7 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish immutable tag, then last-known-good latest
+      - name: Publish immutable image
         if: steps.current.outputs.publish == 'true'
         id: publish
         env:
@@ -132,7 +132,6 @@ jobs:
             existing_digest=$(docker buildx imagetools inspect --format '{{json .}}' "$image" | sed -n 's/.*"digest": *"\(sha256:[0-9a-f]\{64\}\)".*/\1/p' | head -n1)
           fi
           test -n "$existing_digest"
-          docker buildx imagetools create --tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}@${existing_digest}"
           printf 'image=%s\ndigest=%s\n' "$IMAGE_NAME" "$existing_digest" >> "$GITHUB_OUTPUT"
       - name: Attest published image provenance
         if: steps.current.outputs.publish == 'true'
@@ -141,6 +140,15 @@ jobs:
           subject-name: ${{ steps.publish.outputs.image }}
           subject-digest: ${{ steps.publish.outputs.digest }}
           push-to-registry: true
+      - name: Promote attested image to latest
+        if: steps.current.outputs.publish == 'true'
+        env:
+          IMAGE: ${{ steps.publish.outputs.image }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -eu
+          [ -n "$DIGEST" ]
+          docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}@${DIGEST}"
       - name: Make the package public when repository settings permit
         if: steps.current.outputs.publish == 'true'
         env:

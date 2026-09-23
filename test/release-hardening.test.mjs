@@ -33,7 +33,7 @@ test("publish gates latest on both current source and current upstream digest be
   const publish = workflows.find(([file]) => file === "publish.yml")?.[1] || "";
   const freshness = publish.indexOf("Refuse stale source or upstream validation");
   const login = publish.indexOf("Authenticate to GHCR after validation");
-  const publishTags = publish.indexOf("Publish immutable tag, then last-known-good latest");
+  const publishTags = publish.indexOf("Publish immutable image");
   assert.ok(freshness >= 0 && freshness < login && login < publishTags);
   assert.match(publish, /VALIDATED_UPSTREAM_DIGEST: \$\{\{ needs\.validate\.outputs\.upstream_digest \}\}/);
   assert.match(publish, /docker buildx imagetools inspect "\$UPSTREAM_IMAGE"/);
@@ -130,7 +130,7 @@ test("immutable release tags encode the complete source and upstream identities"
 
 test("publication is idempotent for matching immutable tags and fail-closed otherwise", () => {
   const publish = workflows.find(([file]) => file === "publish.yml")?.[1] || "";
-  const publication = publish.slice(publish.indexOf("Publish immutable tag, then last-known-good latest"));
+  const publication = publish.slice(publish.indexOf("Publish immutable image"));
   assert.match(publication, /tag=\$\(\.\/scripts\/derive-image-tag\.sh "\$REVISION" "\$UPSTREAM_DIGEST"\)/);
   assert.match(publication, /existing_digest=.*imagetools inspect --format '\{\{json \.\}\}'/);
   assert.match(publication, /if \[ -n "\$existing_digest" \]; then/);
@@ -139,8 +139,14 @@ test("publication is idempotent for matching immutable tags and fail-closed othe
   assert.match(publication, /\[ "\$existing_revision" != "\$REVISION" \] \|\| \[ "\$existing_upstream" != "\$UPSTREAM_DIGEST" \]/);
   assert.match(publication, /Immutable tag \$\{tag\} already identifies a different image/);
   const immutablePush = publication.indexOf('docker push "$image"');
-  const latestPush = publication.indexOf('docker buildx imagetools create --tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}@${existing_digest}"');
-  assert.ok(immutablePush >= 0 && immutablePush < latestPush);
+  const attest = publication.indexOf("uses: actions/attest-build-provenance");
+  const latestPush = publication.indexOf('docker buildx imagetools create --tag "${IMAGE}:latest" "${IMAGE}@${DIGEST}"');
+  assert.ok(immutablePush >= 0, "the immutable image must be pushed");
+  assert.ok(attest >= 0, "provenance attestation must run");
+  assert.ok(latestPush >= 0, "latest must be promoted from the immutable digest");
+  assert.ok(immutablePush < attest, "immutable publication must precede attestation");
+  assert.ok(attest < latestPush, "latest must only advance after attestation succeeds");
+  assert.match(publication, /DIGEST: \$\{\{ steps\.publish\.outputs\.digest \}\}/);
 });
 
 test("published GHCR image receives SHA-pinned provenance with least required permissions", () => {

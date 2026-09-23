@@ -306,7 +306,7 @@ services:
     image: ghcr.io/skulldorom/9router-auto-router:sha-<full-40-character-auto-router-commit>-upstream-<64-character-upstream-digest>
 ```
 
-The tag omits the `sha256:` separator before the upstream digest. Every source-and-upstream pair receives one immutable tag. A retry skips an existing tag only when both image labels match that pair; any mismatch fails closed. `latest` remains the mutable last-known-good pointer and changes only after the immutable image is published and both source and upstream freshness checks pass.
+The tag omits the `sha256:` separator before the upstream digest. Every source-and-upstream pair receives one immutable tag. A retry skips an existing tag only when both image labels match that pair; any mismatch fails closed. `latest` remains the mutable last-known-good pointer and changes only after the immutable image is published, its provenance attestation succeeds, and both source and upstream freshness checks pass.
 
 Each immutable GHCR image also receives a signed SLSA build-provenance attestation. Verify a deployed image with:
 
