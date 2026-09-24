@@ -281,6 +281,18 @@ test("patcher transforms fixtures containing awkward strings, comments and templ
   assert.match(patched, /9router-auto-router-ui:v9/);
 });
 
+test("patcher fails closed when the card strategy callback has extra side effects", () => {
+  const changed = 'onSetStrategy:b=>{A(a.name,b),z(a.name)}';
+  const server = serverUi.replace('onSetStrategy:b=>A(a.name,b)', changed);
+  const client = clientUi.replace('onSetStrategy:t=>W(e.name,t)', 'onSetStrategy:t=>{W(e.name,t),Q(e.name)}');
+  const dir = fixture({ server, client });
+  const before = uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"));
+  const result = patch(dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /strategy persistence callback is incompatible/);
+  uiFiles(dir).forEach((file, index) => assert.equal(fs.readFileSync(file, "utf8"), before[index]));
+});
+
 test("patcher does not depend on minified identifiers or chunk filenames", () => {
   const renamed = serverUi
     .replace(/\bbI\b/g, "$options")
