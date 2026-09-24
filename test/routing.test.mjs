@@ -177,6 +177,39 @@ test("legacy migration initializes visible model order from effective runtime ta
   }
 });
 
+test("Edit Combo Save fetches fresh settings, merges strategy entries, and preserves dormant configuration", () => {
+  const dir = fixture(); assert.equal(patch(dir).status, 0);
+  for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) {
+    assert.match(source, /const _arSave=async\(comboData,strategy\)=>\{let settings,original=/);
+    assert.match(source, /await fetch\("\/api\/settings"\)/);
+    assert.match(source, /configs=\{\.\.\.\(settings\.comboStrategies\|\|\{\}\)\}/);
+    assert.match(source, /oldName!==newName\)\{let old=configs\[oldName\];delete configs\[oldName\];if\(old\)configs\[newName\]=old\}/);
+    assert.match(source, /strategy&&strategy\.autoRouter/);
+    assert.match(source, /freshConfig\}=base\.autoRouter&&typeof base\.autoRouter==="object"\?base\.autoRouter:\{\}/);
+    assert.match(source, /next\.autoRouter=\{\.\.\.freshConfig,\.\.\.strategy\.autoRouter\}/);
+    assert.match(source, /models:comboData\.models/);
+  }
+});
+
+test("generated Save keeps validation, bounds, persistence ordering, rollback, and recovery protections", () => {
+  const dir = fixture(); assert.equal(patch(dir).status, 0);
+  for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) {
+    const modal = modalSection(source);
+    for (const [key, min, max] of [["hardThreshold", 1, 100], ["longContextChars", 1, 10000000], ["largeToolResultChars", 1, 10000000], ["manyTools", 1, 10000]]) {
+      assert.match(modal, new RegExp(`${key}:\\[${min},${max}\\]`));
+      assert.match(modal, new RegExp(`_arNumber\\([^)]*,"${key}"`));
+      assert.match(modal, new RegExp(`min:${min},max:${max}`));
+    }
+    assert.match(modal, /if\(![A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\)return/);
+    assert.match(modal, /[A-Za-z_$][\w$]*\(!0\);try\{/);
+    assert.match(modal, /finally\{[A-Za-z_$][\w$]*\(!1\)\}/);
+    assert.match(source, /await fetch\("\/api\/settings"\).*?await fetch\(`\/api\/combos\//);
+    assert.match(source, /if\(!persisted\.ok\).*?await rollback/);
+    assert.match(source, /await fetch\("\/api\/settings"\).*?JSON\.stringify\(current\.comboStrategies\|\|\{\}\)===JSON\.stringify\(configs\)/);
+    assert.match(source, /await [A-Za-z_$][\w$]*\(\),[A-Za-z_$][\w$]*\(null\)/);
+  }
+});
+
 test("card strategy persistence keeps dormant Auto Router configuration", () => {
   const dir = fixture(); assert.equal(patch(dir).status, 0);
   for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) {
@@ -184,7 +217,6 @@ test("card strategy persistence keeps dormant Auto Router configuration", () => 
     assert.match(source, /next=\{\.\.\.configs\[name\]\|\|\{\},\.\.\.change\}/);
     assert.match(source, /"fallback"!==next\.fallbackStrategy\|\|next\.autoRouter/);
     assert.match(source, /onSetStrategy:[A-Za-z_$][\w$]*=>_arSetStrategy\([A-Za-z_$][\w$]*\.name,[A-Za-z_$][\w$]*\)/);
-    assert.match(source, /let \{easyTarget:_arLegacyEasy,hardTarget:_arLegacyHard,\.\.\.base\}/);
   }
 });
 test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v9/); assert.equal(source.split("9router-auto-router-ui:v9").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });

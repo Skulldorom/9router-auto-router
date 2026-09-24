@@ -86,8 +86,8 @@ test("rollback browser regression attaches stdin, verifies execution markers, an
   assert.match(rollback, /for \(const value of \["fallback", "round-robin", "fusion", "auto"\]\)/);
   assert.match(rollback, /option\[value="\$\{value\}"\]/);
   assert.match(rollback, /for \(const nextStrategy of \["round-robin", "fusion"\]\)/);
-  assert.match(rollback, /strategy\.selectOption\(nextStrategy\)/);
-  assert.match(rollback, /strategy\.selectOption\("auto"\)/);
+  assert.match(rollback, /autoCard\(\)\.locator\("select"\)\.selectOption\(nextStrategy\)/);
+  assert.match(rollback, /autoCard\(\)\.locator\("select"\)\.selectOption\("auto"\)/);
   assert.match(rollback, /Edit Combo retained a Strategy selector/);
   assert.match(rollback, /did not label ordered model target as/);
   assert.match(rollback, /Legacy targets remain effective until this model order is saved/);
