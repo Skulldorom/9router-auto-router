@@ -19,7 +19,7 @@ OWNER_UID=$(id -u); OWNER_GID=$(id -g)
 cleanup() { status=$?; trap - EXIT INT TERM; docker rm -f "$NAME" "$MOCK_NAME" >/dev/null 2>&1 || true; docker network rm "$NETWORK" >/dev/null 2>&1 || true; rm -rf "$WORK_DIR"; purge_dir "$IMAGE" "$DATA_DIR" "$OWNER_UID" "$OWNER_GID" || true; purge_dir "$IMAGE" "$MOCK_DIR" "$OWNER_UID" "$OWNER_GID" || true; exit "$status"; }
 trap cleanup EXIT; trap 'exit 130' INT; trap 'exit 143' TERM
 prepare_data_dir "$IMAGE" "$DATA_DIR" "$(container_runtime_user "$IMAGE")"
-printf '%s\n' 'const http=require("http");http.createServer((q,s)=>{q.resume();q.on("end",()=>s.end(JSON.stringify({message:{content:"ok"}})))}).listen(8080);' > "$MOCK_DIR/server.cjs"
+printf '%s\n' 'const http=require("http");http.createServer((q,s)=>{let body="";q.on("data",chunk=>body+=chunk);q.on("end",()=>{let model;try{model=JSON.parse(body).model}catch{}s.end(JSON.stringify({message:{content:model||"unknown"}}))})}).listen(8080);' > "$MOCK_DIR/server.cjs"
 chmod 644 "$MOCK_DIR/server.cjs"
 docker network create "$NETWORK" >/dev/null
 docker run -d --name "$MOCK_NAME" --network "$NETWORK" -v "$MOCK_DIR:/journal" -w /journal "$NODE_IMAGE" node server.cjs >/dev/null
@@ -97,70 +97,106 @@ const phase = process.env.PHASE;
       if (request.url().includes("/api/settings") && request.method() === "PATCH") settingsPatches += 1;
     });
     const settingsPatch = () => page.waitForResponse(response => response.url().includes("/api/settings") && response.request().method() === "PATCH" && response.ok());
-    const autoCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]");
-    if (await autoCard.getByText("Easy target", { exact: true }).count()) throw new Error(`${phase} leaked Easy target onto the combo card`);
-    if (await autoCard.getByText("Hard target", { exact: true }).count()) throw new Error(`${phase} leaked Hard target onto the combo card`);
-    if (await autoCard.getByText("Advanced", { exact: true }).count()) throw new Error(`${phase} leaked Advanced controls onto the combo card`);
-    await autoCard.locator("button[title=\"Edit\"]").click();
-    const strategy = page.locator("select").first();
-    await strategy.selectOption("auto");
-    if (await page.getByLabel("Easy target").count() !== 1 || await page.getByLabel("Hard target").count() !== 1 || await page.getByText("Advanced", { exact: true }).count() !== 1) throw new Error(`${phase} did not show Auto Router modal controls`);
-    await page.getByLabel("Easy target").selectOption("coder");
-    await page.getByLabel("Hard target").selectOption("coder-high");
-    await page.getByText("Advanced", { exact: true }).click();
-    const hardThreshold = page.getByLabel(/Hard threshold/);
-    await hardThreshold.fill("7");
-    await hardThreshold.blur();
-    if (settingsPatches !== 0) throw new Error(`${phase} persisted modal edits before Save`);
+    const autoCard = () => page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]");
+    const editModal = () => page.getByText("Edit Combo", { exact: true }).last().locator("xpath=../../..");
+    const displayedModels = modal => modal.locator('button[title="Drag to reorder"]').evaluateAll(buttons => buttons.map(button => button.parentElement?.querySelector('div[title="Click to edit"]')?.textContent?.trim() || ""));
+    const settingsAndCombo = async () => {
+      const [settingsResponse, combosResponse] = await Promise.all([page.request.get(`${process.env.BASE_URL}/api/settings`), page.request.get(`${process.env.BASE_URL}/api/combos`)]);
+      return { settings: await settingsResponse.json(), combo: (await combosResponse.json()).combos.find(entry => entry.name === "coder-auto") };
+    };
+    const assertDormant = async strategyName => {
+      const { settings, combo } = await settingsAndCombo(), config = settings.comboStrategies?.["coder-auto"]?.autoRouter;
+      if (settings.comboStrategies?.["coder-auto"]?.fallbackStrategy !== strategyName || config?.easyTarget !== "coder" || config?.hardTarget !== "coder-high" || config?.hardThreshold !== 7 || config?.longContextChars !== 24000 || config?.largeToolResultChars !== 12000 || config?.manyTools !== 16 || config?.verbose !== true || JSON.stringify(combo?.models) !== JSON.stringify(["coder-high", "coder", "coder-auto-model"])) throw new Error(`${phase} ${strategyName} did not preserve dormant legacy Auto Router settings or stored model order`);
+    };
+    const comboResponse = await page.request.get(`${process.env.BASE_URL}/api/combos`);
+    const autoCombo = (await comboResponse.json()).combos.find(combo => combo.name === "coder-auto");
+    if (!autoCombo) throw new Error(`${phase} could not find coder-auto through the combos API`);
+    let response = await page.request.put(`${process.env.BASE_URL}/api/combos/${autoCombo.id}`, { data: { ...autoCombo, models: ["coder-high", "coder", "coder-auto-model"] } });
+    if (!response.ok()) throw new Error(`${phase} could not seed ordered model migration coverage`);
+    response = await page.request.patch(`${process.env.BASE_URL}/api/settings`, { data: { comboStrategies: { "coder-auto": { fallbackStrategy: "auto", autoRouter: { easyTarget: "coder", hardTarget: "coder-high", hardThreshold: 7, longContextChars: 24000, largeToolResultChars: 12000, manyTools: 16, verbose: true } } } } });
+    if (!response.ok()) throw new Error(`${phase} could not seed legacy Auto Router settings`);
+    const keyResponse = await page.request.post(`${process.env.BASE_URL}/api/keys`, { data: { name: `browser-${phase}` } });
+    if (!keyResponse.ok()) throw new Error(`${phase} could not create runtime key`);
+    const key = (await keyResponse.json()).key;
+    const route = async content => {
+      const routed = await page.request.post(`${process.env.BASE_URL}/api/v1/chat/completions`, { headers: { Authorization: `Bearer ${key}` }, data: { model: "coder-auto", messages: [{ role: "user", content }], stream: false } });
+      if (!routed.ok()) throw new Error(`${phase} Auto Router request failed: ${routed.status()}`);
+      const body = await routed.json();
+      return body.choices?.[0]?.message?.content ?? body.message?.content;
+    };
+    await page.reload({ waitUntil: "networkidle" });
+
+    const card = autoCard();
+    const strategy = card.locator("select");
+    if (await strategy.count() !== 1) throw new Error(`${phase} combo card did not expose one strategy selector`);
+    for (const value of ["fallback", "round-robin", "fusion", "auto"]) {
+      if (await strategy.locator(`option[value="${value}"]`).count() !== 1) throw new Error(`${phase} combo card omitted upstream/Auto Router strategy ${value}`);
+    }
+    if (await card.getByText("Easy target", { exact: true }).count() || await card.getByText("Advanced", { exact: true }).count()) throw new Error(`${phase} leaked Auto Router detail controls onto the combo card`);
+    if (await route("hello") !== "coder-model") throw new Error(`${phase} legacy Auto Router did not route Easy requests to coder`);
+    if (await route("fully audit this concurrency race condition") !== "coder-high-model") throw new Error(`${phase} legacy Auto Router did not route Hard requests to coder-high`);
+
+    let switched = settingsPatch();
+    await strategy.selectOption("fallback"); await switched;
+    await assertDormant("fallback");
+    await autoCard().locator("button[title=\"Edit\"]").click();
+    const fallbackModal = editModal();
+    await fallbackModal.waitFor({ timeout: 10_000 });
+    if (await fallbackModal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count()) throw new Error(`${phase} showed legacy migration while Fallback was active`);
+    const fallbackModels = await displayedModels(fallbackModal);
+    if (JSON.stringify(fallbackModels) !== JSON.stringify(["coder-high", "coder", "coder-auto-model"])) throw new Error(`${phase} Fallback rewrote visible stored models: ${JSON.stringify(fallbackModels)}`);
+    const fallbackSave = settingsPatch();
+    await fallbackModal.getByRole("button", { name: "Save", exact: true }).click(); await fallbackSave;
+    await assertDormant("fallback");
+    await page.reload({ waitUntil: "networkidle" });
+    await assertDormant("fallback");
+
+    for (const nextStrategy of ["round-robin", "fusion"]) {
+      switched = settingsPatch();
+      await autoCard().locator("select").selectOption(nextStrategy); await switched;
+      await assertDormant(nextStrategy);
+      await autoCard().locator("button[title=\"Edit\"]").click();
+      const modal = editModal();
+      await modal.waitFor({ timeout: 10_000 });
+      if (await modal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count()) throw new Error(`${phase} showed legacy migration while ${nextStrategy} was active`);
+      const models = await displayedModels(modal);
+      if (JSON.stringify(models) !== JSON.stringify(["coder-high", "coder", "coder-auto-model"])) throw new Error(`${phase} ${nextStrategy} rewrote visible stored models: ${JSON.stringify(models)}`);
+      const saved = settingsPatch();
+      await modal.getByRole("button", { name: "Save", exact: true }).click(); await saved;
+      await assertDormant(nextStrategy);
+    }
+
+    const restored = settingsPatch();
+    await autoCard().locator("select").selectOption("auto"); await restored;
+    await autoCard().locator("button[title=\"Edit\"]").click();
+    const modal = editModal();
+    await modal.waitFor({ timeout: 10_000 });
+    if (await modal.getByText("Strategy", { exact: true }).count()) throw new Error(`${phase} Edit Combo retained a Strategy selector`);
+    for (const label of ["Easy", "Hard", "Ignored"]) if (await modal.getByText(label, { exact: true }).count() !== 1) throw new Error(`${phase} did not label ordered model target as ${label}`);
+    if (await modal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count() !== 1) throw new Error(`${phase} did not identify pending legacy target migration`);
+    const migratedModels = await displayedModels(modal);
+    if (JSON.stringify(migratedModels) !== JSON.stringify(["coder", "coder-high", "coder-auto-model"])) { const { settings } = await settingsAndCombo(); throw new Error(`${phase} did not initialize model order from legacy routing: ${JSON.stringify(migratedModels)} settings=${JSON.stringify(settings.comboStrategies?.["coder-auto"])}`); }
+    await modal.getByText("Advanced", { exact: true }).click();
+    const hardThreshold = modal.getByLabel(/Hard threshold/);
+    if (await hardThreshold.inputValue() !== "7") throw new Error(`${phase} did not preserve advanced settings while switching strategies`);
+    if (settingsPatches !== 7) throw new Error(`${phase} unexpectedly persisted modal edits before Save`);
     const save = settingsPatch();
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await save;
-    if (settingsPatches !== 1) throw new Error(`${phase} expected one settings PATCH after Save, got ${settingsPatches}`);
+    await modal.getByRole("button", { name: "Save", exact: true }).click(); await save;
     await page.waitForFunction(async () => {
-      const response = await fetch("/api/settings");
-      if (!response.ok) return false;
-      const saved = (await response.json()).comboStrategies?.["coder-auto"];
-      return saved?.fallbackStrategy === "auto" && saved.autoRouter?.easyTarget === "coder" && saved.autoRouter?.hardTarget === "coder-high" && saved.autoRouter?.hardThreshold === 7;
+      const [settingsResponse, combosResponse] = await Promise.all([fetch("/api/settings"), fetch("/api/combos")]);
+      if (!settingsResponse.ok || !combosResponse.ok) return false;
+      const settings = await settingsResponse.json(), combo = (await combosResponse.json()).combos.find(entry => entry.name === "coder-auto");
+      const config = settings.comboStrategies?.["coder-auto"]?.autoRouter;
+      return settings.comboStrategies?.["coder-auto"]?.fallbackStrategy === "auto" && config?.hardThreshold === 7 && config?.longContextChars === 24000 && config?.largeToolResultChars === 12000 && config?.manyTools === 16 && config?.verbose === true && !("easyTarget" in config) && !("hardTarget" in config) && JSON.stringify(combo?.models) === JSON.stringify(["coder", "coder-high", "coder-auto-model"]);
     }, { timeout: 10_000 });
-    await page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]").locator("button[title=\"Edit\"]").click();
-    await page.getByLabel("Easy target").selectOption("coder-high");
-    await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    if (settingsPatches !== 1) throw new Error(`${phase} persisted modal edits before Save`);
-    await page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]").locator("button[title=\"Edit\"]").click();
-    if (await page.getByLabel("Easy target").inputValue() !== "coder") throw new Error(`${phase} Cancel did not discard the Easy target draft`);
-    await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    assertNoErrors();
     await page.reload({ waitUntil: "networkidle" });
-    const reloadedCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]");
-    await reloadedCard.locator("button[title=\"Edit\"]").click();
-    if (await page.locator("select").first().inputValue() !== "auto") throw new Error(`${phase} did not persist Auto Router selection`);
-    if (await page.getByLabel("Easy target").inputValue() !== "coder") throw new Error(`${phase} did not persist Easy target`);
-    if (await page.getByLabel("Hard target").inputValue() !== "coder-high") throw new Error(`${phase} did not persist Hard target`);
-    await page.getByText("Advanced", { exact: true }).click();
-    if (await page.getByLabel(/Hard threshold/).inputValue() !== "7") throw new Error(`${phase} did not persist the Advanced hard threshold`);
-    await page.getByRole("button", { name: "Cancel", exact: true }).click();
-    const currentSettings = await page.request.get(`${process.env.BASE_URL}/api/settings`);
-    if (!currentSettings.ok()) throw new Error(`${phase} could not load settings for missing target coverage`);
-    const nextSettings = await currentSettings.json();
-    nextSettings.comboStrategies["coder-auto"].autoRouter.easyTarget = "removed-easy-target";
-    const missingTarget = await page.request.patch(`${process.env.BASE_URL}/api/settings`, { data: { comboStrategies: nextSettings.comboStrategies } });
-    if (!missingTarget.ok()) throw new Error(`${phase} could not persist missing target coverage state`);
-    await page.reload({ waitUntil: "networkidle" });
-    const missingCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]");
-    await missingCard.locator("button[title=\"Edit\"]").click();
-    const missingEasy = page.getByLabel("Easy target");
-    if (await missingEasy.inputValue() !== "removed-easy-target") throw new Error(`${phase} silently replaced a missing Easy target`);
-    const missingOption = page.locator('option[value="removed-easy-target"]');
-    if (await missingOption.getAttribute("disabled") === null) throw new Error(`${phase} missing Easy target did not render as a disabled warning option`);
-    await missingEasy.selectOption("coder");
-    const replaceMissing = settingsPatch();
-    await page.getByRole("button", { name: "Save", exact: true }).click();
-    await replaceMissing;
-    await page.reload({ waitUntil: "networkidle" });
-    const repairedCard = page.getByText("coder-auto", { exact: true }).first().locator("xpath=ancestor::*[.//button[@title=\"Edit\"]][1]");
-    await repairedCard.locator("button[title=\"Edit\"]").click();
-    if (await page.getByLabel("Easy target").inputValue() !== "coder" || await page.locator('option[value="removed-easy-target"]').count()) throw new Error(`${phase} did not replace the stale Easy target`);
-    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await autoCard().locator("button[title=\"Edit\"]").click();
+    const reloadedModal = editModal();
+    await reloadedModal.waitFor({ timeout: 10_000 });
+    if (await reloadedModal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count()) throw new Error(`${phase} legacy target notice remained after normalization`);
+    await reloadedModal.getByRole("button", { name: "Cancel", exact: true }).click();
+    if (await route("hello") !== "coder-model") throw new Error(`${phase} migrated Auto Router did not route Easy requests to coder`);
+    if (await route("fully audit this concurrency race condition") !== "coder-high-model") throw new Error(`${phase} migrated Auto Router did not route Hard requests to coder-high`);
     assertNoErrors();
   }
   await context.close();
@@ -186,16 +222,16 @@ assert_data; stop
 
 start "$IMAGE"
 browser_combos patched-before-auto true
-settings | grep -q 'fallbackStrategy":"auto'; settings | grep -q '"easyTarget":"coder"'; settings | grep -q '"hardTarget":"coder-high"'; assert_data
+settings | grep -q 'fallbackStrategy":"auto'; ! settings | grep -q '"easyTarget"'; ! settings | grep -q '"hardTarget"'; combos | grep -q '"models":\["coder","coder-high","coder-auto-model"\]'; assert_data
 KEY=$(api -X POST --data '{"name":"rollback"}' "http://127.0.0.1:$PORT/api/keys" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).key))')
-curl --fail --silent -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" --data '{"model":"coder-auto","messages":[{"role":"user","content":"rename this"}]}' "http://127.0.0.1:$PORT/api/v1/chat/completions" | grep -q 'ok'
+curl --fail --silent -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" --data '{"model":"coder-auto","messages":[{"role":"user","content":"rename this"}]}' "http://127.0.0.1:$PORT/api/v1/chat/completions" | grep -q 'coder-model'
 stop
 
 start "$UPSTREAM_IMAGE"
 assert_data
 browser_combos stock-rollback
 stock_auto_response=$(curl --silent -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" --data '{"model":"coder-auto","messages":[{"role":"user","content":"stock auto behavior"}]}' "http://127.0.0.1:$PORT/api/v1/chat/completions")
-printf '%s' "$stock_auto_response" | grep -q 'ok' || { echo "Expected observed stock fallbackStrategy:auto delegation response, got: $stock_auto_response" >&2; exit 1; }
+printf '%s' "$stock_auto_response" | grep -q 'coder-model' || { echo "Expected observed stock fallbackStrategy:auto delegation response, got: $stock_auto_response" >&2; exit 1; }
 api -X PATCH --data '{"comboStrategies":{"coder-auto":{"fallbackStrategy":"fallback"}},"unrelatedRollbackSetting":"preserve-me"}' "http://127.0.0.1:$PORT/api/settings" >/dev/null
 settings | grep -q 'fallbackStrategy":"fallback'; combos | grep -q 'coder-auto-model'; assert_data; stop
 
@@ -203,4 +239,4 @@ start "$IMAGE"; assert_data
 browser_combos patched-after-recovery
 api -X PATCH --data '{"comboStrategies":{"coder-auto":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"coder","hardTarget":"coder-high"}}},"unrelatedRollbackSetting":"preserve-me"}' "http://127.0.0.1:$PORT/api/settings" >/dev/null
 settings | grep -q 'fallbackStrategy":"auto'; browser_combos patched-reconfigured true
-echo "Rollback compatibility test passed: stock → Auto Router → stock → Auto Router used one /app/data volume; stock delegates persisted fallbackStrategy:auto to the combo model, and recovery to fallback preserves combo models and unrelated settings."
+echo "Rollback compatibility test passed: stock → Auto Router → stock → Auto Router used one /app/data volume; stock preserves persisted fallbackStrategy:auto routing, and recovery to fallback preserves combo models and unrelated settings."

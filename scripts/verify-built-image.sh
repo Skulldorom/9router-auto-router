@@ -7,7 +7,7 @@ EXPECTED_UPSTREAM_DIGEST=${3:-${EXPECTED_UPSTREAM_DIGEST:-}}
 EXPECTED_AUTO_ROUTER_VERSION=${4:-${EXPECTED_AUTO_ROUTER_VERSION:-}}
 EXPECTED_UPSTREAM_VERSION=${5:-${EXPECTED_UPSTREAM_VERSION:-}}
 MARKER=9router-auto-router:v3
-UI_MARKER=9router-auto-router-ui:v5
+UI_MARKER=9router-auto-router-ui:v9
 
 fail() {
   echo "Built image verification failed: $*" >&2
@@ -41,25 +41,21 @@ set -eu
 [ -f /opt/auto-router-config.cjs ]
 [ -f /opt/9router-auto-router/auto-router.cjs ]
 [ -f /opt/9router-auto-router/apply-patch.mjs ]
+UI_MARKER=9router-auto-router-ui:v9
 runtime_files=$(grep -RFl "9router-auto-router:v3" /app/.next/server 2>/dev/null || true)
 [ "$(printf "%s\n" "$runtime_files" | sed "/^$/d" | wc -l)" -eq 1 ]
 runtime_file=$(printf "%s\n" "$runtime_files" | sed -n "/./{p;q;}")
 [ "$(grep -o "routeAutoCombo" "$runtime_file" | wc -l)" -eq 2 ]
-ui_files=$(grep -RFl "9router-auto-router-ui:v5" /app/.next 2>/dev/null || true)
+ui_files=$(grep -RFl "$UI_MARKER" /app/.next 2>/dev/null || true)
 [ "$(printf "%s\n" "$ui_files" | sed "/^$/d" | wc -l)" -eq 2 ]
 for file in $ui_files; do
-  [ "$(grep -o "9router-auto-router-ui:v5" "$file" | wc -l)" -eq 1 ]
-  [ "$(grep -o "label:\"Auto Router\"" "$file" | wc -l)" -eq 2 ]
-  [ "$(grep -o "availableCombos:" "$file" | wc -l)" -eq 2 ]
-  [ "$(grep -o "availableCombos:[A-Za-z_$][A-Za-z0-9_$]*\.map(" "$file" | wc -l)" -eq 1 ]
-  if grep -q "availableCombos:_arComboCollection.map(" "$file"; then
-    grep -Eq "\.map\(\([^,]+,_arComboIndex,_arComboCollection\)=>.*availableCombos:_arComboCollection\.map\(" "$file"
-  fi
-  ! grep -Eq "availableCombos:[A-Za-z_$][A-Za-z0-9_$]*\.map\([^A-Za-z_$]" "$file"
+  [ "$(grep -o "$UI_MARKER" "$file" | wc -l)" -eq 1 ]
+  [ "$(grep -o "label:\"Auto Router\"" "$file" | wc -l)" -eq 1 ]
   [ "$(grep -o "autoRouter" "$file" | wc -l)" -ge 2 ]
-  grep -q "Easy target" "$file"
-  grep -q "Hard target" "$file"
+  grep -q "Models after position 2 are ignored by Auto Router" "$file"
   grep -q "Advanced" "$file"
+  ! grep -q "Easy target" "$file"
+  ! grep -q "Hard target" "$file"
 done
 node /opt/9router-auto-router/apply-patch.mjs /app --check
 SH
