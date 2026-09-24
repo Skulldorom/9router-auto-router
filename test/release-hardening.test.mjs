@@ -65,7 +65,7 @@ test("derived image verification precedes every image integration test", () => {
   assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http && http < parity && parity < rollback);
   assert.match(validate, /verify-built-image\.sh "\$\{\{ inputs\.image_tag \}\}" "\$REVISION" "\$UPSTREAM_DIGEST"/);
   const verifier = fs.readFileSync(path.join(root, "scripts/verify-built-image.sh"), "utf8");
-  for (const required of ["auto-router-config.cjs", "auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v8", "Models after position 2 are ignored by Auto Router", "Advanced", "org.opencontainers.image.revision", "upstream.digest"]) assert.ok(verifier.includes(required));
+  for (const required of ["auto-router-config.cjs", "auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v9", "Models after position 2 are ignored by Auto Router", "Advanced", "org.opencontainers.image.revision", "upstream.digest"]) assert.ok(verifier.includes(required));
   assert.ok(verifier.includes('grep -o "label:\\"Auto Router\\\"" "$file" | wc -l)" -eq 1'));
   assert.ok(verifier.includes('grep -o "$UI_MARKER" "$file" | wc -l'));
   assert.ok(verifier.includes('grep -q "Advanced" "$file"'));

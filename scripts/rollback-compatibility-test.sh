@@ -119,6 +119,20 @@ const phase = process.env.PHASE;
     await strategy.selectOption("fallback"); await switched;
     const fallbackSettings = await (await page.request.get(`${process.env.BASE_URL}/api/settings`)).json();
     if (fallbackSettings.comboStrategies?.["coder-auto"]?.fallbackStrategy !== "fallback" || fallbackSettings.comboStrategies?.["coder-auto"]?.autoRouter?.hardThreshold !== 7) throw new Error(`${phase} switching to Fallback discarded dormant Auto Router configuration`);
+    await autoCard().locator("button[title=\"Edit\"]").click();
+    const fallbackModal = page.getByText("Edit Combo", { exact: true }).locator("xpath=ancestor::*[.//button[normalize-space()='Save']][1]");
+    await fallbackModal.waitFor({ timeout: 10_000 });
+    if (await fallbackModal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count()) throw new Error(`${phase} showed legacy migration while Fallback was active`);
+    const fallbackSave = settingsPatch();
+    await fallbackModal.getByRole("button", { name: "Save", exact: true }).click(); await fallbackSave;
+    await page.waitForFunction(async () => {
+      const [settingsResponse, combosResponse] = await Promise.all([fetch("/api/settings"), fetch("/api/combos")]);
+      if (!settingsResponse.ok || !combosResponse.ok) return false;
+      const settings = await settingsResponse.json(), combo = (await combosResponse.json()).combos.find(entry => entry.name === "coder-auto");
+      const config = settings.comboStrategies?.["coder-auto"]?.autoRouter;
+      return settings.comboStrategies?.["coder-auto"]?.fallbackStrategy === "fallback" && config?.hardThreshold === 7 && config?.easyTarget === "coder" && config?.hardTarget === "coder-high" && JSON.stringify(combo?.models) === JSON.stringify(["coder-high", "coder", "coder-auto-model"]);
+      return settings.comboStrategies?.["coder-auto"]?.fallbackStrategy === "fallback" && config?.hardThreshold === 7 && config?.easyTarget === "coder" && config?.hardTarget === "coder-high" && JSON.stringify(combo?.models) === JSON.stringify(["coder-high", "coder", "coder-auto-model"]);
+    }, { timeout: 10_000 });
     for (const nextStrategy of ["round-robin", "fusion"]) {
       const switchedAgain = settingsPatch();
       await strategy.selectOption(nextStrategy); await switchedAgain;
@@ -139,7 +153,7 @@ const phase = process.env.PHASE;
     await modal.getByText("Advanced", { exact: true }).click();
     const hardThreshold = modal.getByLabel(/Hard threshold/);
     if (await hardThreshold.inputValue() !== "7") throw new Error(`${phase} did not preserve advanced settings while switching strategies`);
-    if (settingsPatches !== 4) throw new Error(`${phase} unexpectedly persisted modal edits before Save`);
+    if (settingsPatches !== 5) throw new Error(`${phase} unexpectedly persisted modal edits before Save`);
     const save = settingsPatch();
     await modal.getByRole("button", { name: "Save", exact: true }).click(); await save;
     await page.waitForFunction(async () => {

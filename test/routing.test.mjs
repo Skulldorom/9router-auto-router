@@ -166,12 +166,13 @@ test("legacy migration initializes visible model order from effective runtime ta
   for (const file of uiFiles(dir)) {
     const patched = fs.readFileSync(file, "utf8"), modal = modalSection(patched);
     assert.match(modal, /_arStoredModels=Array\.isArray\(.+?\?\.models\|\|\[\]\)\?.+?\?\.models\|\|\[\]:\[\]/);
-    assert.match(modal, /_arEffectiveModels=_arLegacyTargets\?\[_arSavedConfig\.easyTarget\.trim\(\),_arSavedConfig\.hardTarget\.trim\(\),\.\.\._arStoredModels\.filter\(model=>typeof model!=="string"\|\|\(model\.trim\(\)!==_arSavedConfig\.easyTarget\.trim\(\)&&model\.trim\(\)!==_arSavedConfig\.hardTarget\.trim\(\)\)\)\]:null/);
-    assert.match(modal, /Legacy targets remain effective until this model order is saved/);
+    assert.match(modal, /_arLegacyMigration="auto"===_arInitialStrategy\.fallbackStrategy&&_arLegacyTargets/);
+    assert.match(modal, /_arEffectiveModels=_arLegacyMigration\?\[_arSavedConfig\.easyTarget\.trim\(\),_arSavedConfig\.hardTarget\.trim\(\),\.\.\._arStoredModels\.filter\(model=>typeof model!=="string"\|\|\(model\.trim\(\)!==_arSavedConfig\.easyTarget\.trim\(\)&&model\.trim\(\)!==_arSavedConfig\.hardTarget\.trim\(\)\)\)\]:null/);
+    assert.match(modal, /_arLegacyMigration&&\(0,[A-Za-z_$][\w$]*\.jsx\)\("p",\{className:"text-text-muted",children:"Legacy targets remain effective until this model order is saved\."\}\)/);
     assert.match(modal, /_arEffectiveModels\|\|.+?\?\.models\|\|\[\]/);
     assert.match(modal, /let _arTargets=[A-Za-z_$][\w$]*\.slice\(0,2\)\.map/);
     assert.match(modal, /let \{easyTarget:_arEasyTarget,hardTarget:_arHardTarget,\.\.\.config\}/);
-    assert.match(modal, /_arInitialStrategy\.fallbackStrategy\|\|_arInitialStrategy\.autoRouter&&typeof _arInitialStrategy\.autoRouter==="object"\?\{autoRouter:config\}:null/);
+    assert.match(modal, /"auto"===_arInitialStrategy\.fallbackStrategy\?\{autoRouter:config\}:null/);
     assert.match(patched, /let changed=\{\.\.\.original,\.\.\.comboData,models:comboData\.models\}/);
   }
 });
@@ -186,7 +187,7 @@ test("card strategy persistence keeps dormant Auto Router configuration", () => 
     assert.match(source, /let \{easyTarget:_arLegacyEasy,hardTarget:_arLegacyHard,\.\.\.base\}/);
   }
 });
-test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v8/); assert.equal(source.split("9router-auto-router-ui:v8").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });
+test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v9/); assert.equal(source.split("9router-auto-router-ui:v9").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });
 
 // --- patcher robustness --------------------------------------------------------------------
 
@@ -245,7 +246,7 @@ test("patcher transforms fixtures containing awkward strings, comments and templ
   assert.equal(result.status, 0, result.stderr);
   const patched = fs.readFileSync(uiFiles(dir)[0], "utf8");
   parses(patched);
-  assert.match(patched, /9router-auto-router-ui:v8/);
+  assert.match(patched, /9router-auto-router-ui:v9/);
 });
 
 test("patcher does not depend on minified identifiers or chunk filenames", () => {
