@@ -293,6 +293,17 @@ test("patcher fails closed when the card strategy callback has extra side effect
   uiFiles(dir).forEach((file, index) => assert.equal(fs.readFileSync(file, "utf8"), before[index]));
 });
 
+test("patcher fails closed when the strategy updater gains a side effect", () => {
+  const server = serverUi.replace("}),l(c)}catch(a)", "}),l(c),z()}catch(a)");
+  const client = clientUi.replace("}),x(s)}catch(e)", "}),x(s),Q()}catch(e)");
+  const dir = fixture({ server, client });
+  const before = uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"));
+  const result = patch(dir);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /combo strategy update handler/);
+  uiFiles(dir).forEach((file, index) => assert.equal(fs.readFileSync(file, "utf8"), before[index]));
+});
+
 test("patcher does not depend on minified identifiers or chunk filenames", () => {
   const renamed = serverUi
     .replace(/\bbI\b/g, "$options")
