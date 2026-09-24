@@ -523,5 +523,11 @@ test("model order is the Auto Router target source", () => {
   assert.throws(() => selectConfiguredRoute(easy, "auto", { models: ["only"] }), /requires two distinct usable models/);
   assert.throws(() => selectConfiguredRoute(easy, "auto", { models: ["same", "same"] }), /requires two distinct usable models/);
 });
-test("legacy target configuration remains effective until UI normalization", () => { const persisted = { auto: { fallbackStrategy: "auto", autoRouter: { easyTarget: "legacy-easy", hardTarget: "legacy-hard", hardThreshold: 1 } } }; const result = selectConfiguredRoute(message("fully audit this"), "auto", { models: ["new-easy", "new-hard"], comboStrategies: persisted }); assert.equal(result.target, "legacy-hard"); assert.equal(result.config.easyTarget, "legacy-easy"); });
+test("legacy target configuration remains effective until UI normalization", () => {
+  const persisted = { auto: { fallbackStrategy: "auto", autoRouter: { easyTarget: "legacy-easy", hardTarget: "legacy-hard", hardThreshold: 1 } } };
+  const legacy = selectConfiguredRoute(message("fully audit this"), "auto", { models: ["new-easy", "new-hard"], comboStrategies: persisted });
+  assert.equal(legacy.target, "legacy-hard"); assert.equal(legacy.config.easyTarget, "legacy-easy");
+  const normalized = selectConfiguredRoute(message("fully audit this"), "auto", { models: ["legacy-easy", "legacy-hard", "new-easy", "new-hard"], comboStrategies: { auto: { fallbackStrategy: "auto", autoRouter: { hardThreshold: 1 } } } });
+  assert.equal(normalized.target, "legacy-hard"); assert.equal(normalized.config.easyTarget, "legacy-easy");
+});
 test("missing ordered models return a controlled runtime configuration error", async () => { const response = await router.routeAutoCombo({ body: message("hello"), comboName: "auto", comboStrategies: {}, models: ["only"], log: { info() {}, warn() {} }, delegate: () => new Response("unexpected") }); assert.equal(response.status, 400); assert.match((await response.json()).error.message, /requires two distinct usable models/); });

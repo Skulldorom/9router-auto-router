@@ -65,7 +65,7 @@ test("derived image verification precedes every image integration test", () => {
   assert.ok(verification >= 0 && verification < smoke && smoke < runtime && runtime < persistence && persistence < http && http < parity && parity < rollback);
   assert.match(validate, /verify-built-image\.sh "\$\{\{ inputs\.image_tag \}\}" "\$REVISION" "\$UPSTREAM_DIGEST"/);
   const verifier = fs.readFileSync(path.join(root, "scripts/verify-built-image.sh"), "utf8");
-  for (const required of ["auto-router-config.cjs", "auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v7", "Models after position 2 are ignored by Auto Router", "Advanced", "org.opencontainers.image.revision", "upstream.digest"]) assert.ok(verifier.includes(required));
+  for (const required of ["auto-router-config.cjs", "auto-router.cjs", "apply-patch.mjs", "9router-auto-router:v3", "routeAutoCombo", "9router-auto-router-ui:v8", "Models after position 2 are ignored by Auto Router", "Advanced", "org.opencontainers.image.revision", "upstream.digest"]) assert.ok(verifier.includes(required));
   assert.ok(verifier.includes('grep -o "label:\\"Auto Router\\\"" "$file" | wc -l)" -eq 1'));
   assert.ok(verifier.includes('grep -o "$UI_MARKER" "$file" | wc -l'));
   assert.ok(verifier.includes('grep -q "Advanced" "$file"'));
@@ -85,13 +85,15 @@ test("rollback browser regression attaches stdin, verifies execution markers, an
   assert.match(rollback, /const strategy = card\.locator\("select"\)/);
   assert.match(rollback, /for \(const value of \["fallback", "round-robin", "fusion", "auto"\]\)/);
   assert.match(rollback, /option\[value="\$\{value\}"\]/);
-  assert.match(rollback, /strategy\.selectOption\("round-robin"\)/);
+  assert.match(rollback, /for \(const nextStrategy of \["round-robin", "fusion"\]\)/);
+  assert.match(rollback, /strategy\.selectOption\(nextStrategy\)/);
   assert.match(rollback, /strategy\.selectOption\("auto"\)/);
   assert.match(rollback, /Edit Combo retained a Strategy selector/);
   assert.match(rollback, /did not label ordered model target as/);
   assert.match(rollback, /Legacy targets remain effective until this model order is saved/);
   assert.match(rollback, /!\("easyTarget" in config\)/);
-  assert.match(rollback, /JSON\.stringify\(combo\?\.models\) === JSON\.stringify\(\["coder-high", "coder", "coder-auto-model"\]\)/);
+  assert.match(rollback, /did not initialize model order from legacy routing/);
+  assert.match(rollback, /JSON\.stringify\(combo\?\.models\) === JSON\.stringify\(\["coder", "coder-high", "coder-auto-model"\]\)/);
   assert.match(rollback, /browser_combos patched-before-auto true/);
   assert.match(rollback, /const hardThreshold = modal\.getByLabel\(\/Hard threshold\/\)/);
   assert.match(rollback, /hardThreshold\.inputValue\(\) !== "7"/);

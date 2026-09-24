@@ -116,7 +116,15 @@ const phase = process.env.PHASE;
     }
     if (await card.getByText("Easy target", { exact: true }).count() || await card.getByText("Advanced", { exact: true }).count()) throw new Error(`${phase} leaked Auto Router detail controls onto the combo card`);
     const switched = settingsPatch();
-    await strategy.selectOption("round-robin"); await switched;
+    await strategy.selectOption("fallback"); await switched;
+    const fallbackSettings = await (await page.request.get(`${process.env.BASE_URL}/api/settings`)).json();
+    if (fallbackSettings.comboStrategies?.["coder-auto"]?.fallbackStrategy !== "fallback" || fallbackSettings.comboStrategies?.["coder-auto"]?.autoRouter?.hardThreshold !== 7) throw new Error(`${phase} switching to Fallback discarded dormant Auto Router configuration`);
+    for (const nextStrategy of ["round-robin", "fusion"]) {
+      const switchedAgain = settingsPatch();
+      await strategy.selectOption(nextStrategy); await switchedAgain;
+      const nonAutoSettings = await (await page.request.get(`${process.env.BASE_URL}/api/settings`)).json();
+      if (nonAutoSettings.comboStrategies?.["coder-auto"]?.fallbackStrategy !== nextStrategy || nonAutoSettings.comboStrategies?.["coder-auto"]?.autoRouter?.hardThreshold !== 7) throw new Error(`${phase} switching to ${nextStrategy} discarded dormant Auto Router configuration`);
+    }
     const restored = settingsPatch();
     await strategy.selectOption("auto"); await restored;
 
@@ -125,11 +133,13 @@ const phase = process.env.PHASE;
     await modal.waitFor({ timeout: 10_000 });
     if (await modal.getByText("Strategy", { exact: true }).count()) throw new Error(`${phase} Edit Combo retained a Strategy selector`);
     for (const label of ["Easy", "Hard", "Ignored"]) if (await modal.getByText(label, { exact: true }).count() !== 1) throw new Error(`${phase} did not label ordered model target as ${label}`);
-    if (await modal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count() !== 1) throw new Error(`${phase} did not warn about legacy target normalization`);
+    if (await modal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count() !== 1) throw new Error(`${phase} did not identify pending legacy target migration`);
+    const displayedModels = await Promise.all(["Easy", "Hard", "Ignored"].map(async label => (await modal.getByText(label, { exact: true }).locator("xpath=..").locator("span").nth(1).innerText())));
+    if (JSON.stringify(displayedModels) !== JSON.stringify(["coder", "coder-high", "coder-auto-model"])) throw new Error(`${phase} did not initialize model order from legacy routing: ${JSON.stringify(displayedModels)}`);
     await modal.getByText("Advanced", { exact: true }).click();
     const hardThreshold = modal.getByLabel(/Hard threshold/);
     if (await hardThreshold.inputValue() !== "7") throw new Error(`${phase} did not preserve advanced settings while switching strategies`);
-    if (settingsPatches !== 2) throw new Error(`${phase} unexpectedly persisted modal edits before Save`);
+    if (settingsPatches !== 4) throw new Error(`${phase} unexpectedly persisted modal edits before Save`);
     const save = settingsPatch();
     await modal.getByRole("button", { name: "Save", exact: true }).click(); await save;
     await page.waitForFunction(async () => {
@@ -137,7 +147,7 @@ const phase = process.env.PHASE;
       if (!settingsResponse.ok || !combosResponse.ok) return false;
       const settings = await settingsResponse.json(), combo = (await combosResponse.json()).combos.find(entry => entry.name === "coder-auto");
       const config = settings.comboStrategies?.["coder-auto"]?.autoRouter;
-      return settings.comboStrategies?.["coder-auto"]?.fallbackStrategy === "auto" && config?.hardThreshold === 7 && !("easyTarget" in config) && !("hardTarget" in config) && JSON.stringify(combo?.models) === JSON.stringify(["coder-high", "coder", "coder-auto-model"]);
+      return settings.comboStrategies?.["coder-auto"]?.fallbackStrategy === "auto" && config?.hardThreshold === 7 && !("easyTarget" in config) && !("hardTarget" in config) && JSON.stringify(combo?.models) === JSON.stringify(["coder", "coder-high", "coder-auto-model"]);
     }, { timeout: 10_000 });
     await autoCard().locator("button[title=\"Edit\"]").click();
     const reloadedModal = page.getByText("Edit Combo", { exact: true }).locator("xpath=ancestor::*[.//button[normalize-space()='Save']][1]");
@@ -169,7 +179,7 @@ assert_data; stop
 
 start "$IMAGE"
 browser_combos patched-before-auto true
-settings | grep -q 'fallbackStrategy":"auto'; ! settings | grep -q '"easyTarget"'; ! settings | grep -q '"hardTarget"'; combos | grep -q '"models":\["coder-high","coder","coder-auto-model"\]'; assert_data
+settings | grep -q 'fallbackStrategy":"auto'; ! settings | grep -q '"easyTarget"'; ! settings | grep -q '"hardTarget"'; combos | grep -q '"models":\["coder","coder-high","coder-auto-model"\]'; assert_data
 KEY=$(api -X POST --data '{"name":"rollback"}' "http://127.0.0.1:$PORT/api/keys" | node -e 'let s="";process.stdin.on("data",d=>s+=d);process.stdin.on("end",()=>process.stdout.write(JSON.parse(s).key))')
 curl --fail --silent -H 'Content-Type: application/json' -H "Authorization: Bearer $KEY" --data '{"model":"coder-auto","messages":[{"role":"user","content":"rename this"}]}' "http://127.0.0.1:$PORT/api/v1/chat/completions" | grep -q 'ok'
 stop

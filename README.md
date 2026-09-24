@@ -265,7 +265,7 @@ Auto Router → Auto Router chaining is intentionally unsupported. Runtime valid
 
 ### Legacy configuration compatibility
 
-Earlier Auto Router releases stored `autoRouter.easyTarget` and `autoRouter.hardTarget`. A patched installation continues using those values until the combo is saved in **Edit Combo**. If no ordered models exist, the editor presents the legacy targets as positions 1 and 2; an existing Models list is left untouched. On Save, the visible model order—after any reorder or replacement—is persisted exactly, and the duplicate legacy fields are removed while Advanced settings are retained. This is idempotent and avoids changing routing either at upgrade time or when a user first edits the combo. Stock 9Router safely ignores the additional `autoRouter` settings during rollback.
+Earlier Auto Router releases stored `autoRouter.easyTarget` and `autoRouter.hardTarget`. A patched installation continues using those values until the combo is saved in **Edit Combo**. The editor presents them as positions 1 and 2, followed by existing Models after duplicates are removed, so its visible order matches runtime routing. On Save, the visible model order—after any reorder or replacement—is persisted exactly, and the duplicate legacy fields are removed while Advanced settings are retained. This is idempotent: after the first save, the visible model list is authoritative. Stock 9Router safely ignores the additional `autoRouter` settings during rollback.
 
 Legacy environment variables remain fallback sources for classifier tuning only:
 
