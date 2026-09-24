@@ -167,15 +167,24 @@ function requestCollections(body) {
   return [];
 }
 function inspectRequest(body) {
-  const state = { chars: 0, messageCount: 0, toolCalls: 0, toolResults: 0, toolResultChars: 0, modalities: 0, userTexts: [] };
+  const state = { chars: 0, systemChars: 0, messageCount: 0, systemMessages: 0, toolCalls: 0, toolResults: 0, toolResultChars: 0, modalities: 0, userTexts: [] };
   if (!body || typeof body !== "object" || Array.isArray(body)) return state;
   for (const { items, stringInput } of requestCollections(body)) {
-    state.messageCount += items.length;
-    state.chars += contentLength(items, state);
     for (const item of items) {
       if (stringInput) {
+        state.messageCount += 1;
+        state.chars += item.length;
         state.userTexts.push(item);
         continue;
+      }
+      // Agent clients commonly repeat a large system envelope for every request.
+      // Track it for diagnostics without letting it inflate task-context scoring.
+      if (own(item, "role") === "system") {
+        state.systemMessages += 1;
+        state.systemChars += contentLength(item, state);
+      } else {
+        state.messageCount += 1;
+        state.chars += contentLength(item, state);
       }
       if (isToolResult(item)) state.toolResults += 1;
       const calls = own(item, "tool_calls");
@@ -277,9 +286,6 @@ function classifyTaskComplexity(body, config = getConfig()) {
     else if (state.toolCalls + state.toolResults >= 3) add(2, "repeated-tool-history");
     if (state.toolResultChars >= config.largeToolResultChars) add(4, "large-tool-result-history");
     else if (state.toolResultChars >= Math.floor(config.largeToolResultChars / 3)) add(2, "medium-tool-result-history");
-    if (tools.length >= config.manyTools * 2) add(2, "huge-toolset");
-    else if (tools.length >= config.manyTools) add(1, "large-toolset");
-    else if (tools.length > 0) add(1, "tools-present");
     if (state.modalities >= 3) add(2, "multiple-modalities");
     else if (state.modalities > 0) add(1, "modality-present");
     const latest = state.userTexts.at(-1) || "";
@@ -307,7 +313,7 @@ function classifyTaskComplexity(body, config = getConfig()) {
       if (historicalSemanticScore === historicalSemanticCap) break;
     }
     score = Math.min(score, config.hardThreshold + 1);
-    return { level: score >= config.hardThreshold ? "hard" : "easy", score, reasons: [...new Set(reasons)], metadata: { chars: state.chars, messages: state.messageCount, tools: tools.length, toolCalls: state.toolCalls, toolResults: state.toolResults, toolResultChars: state.toolResultChars, modalities: state.modalities } };
+    return { level: score >= config.hardThreshold ? "hard" : "easy", score, reasons: [...new Set(reasons)], metadata: { chars: state.chars, systemChars: state.systemChars, messages: state.messageCount, systemMessages: state.systemMessages, tools: tools.length, toolCalls: state.toolCalls, toolResults: state.toolResults, toolResultChars: state.toolResultChars, modalities: state.modalities } };
   } catch {
     return { level: "hard", score: config.hardThreshold, reasons: ["classifier-error"], metadata: {} };
   }

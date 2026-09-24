@@ -9,9 +9,10 @@ const selectRoute = (body, comboName, options = {}) => selectConfiguredRoute(bod
 const routeAutoCombo = (options) => router.routeAutoCombo({ models: ["coder", "coder-high"], ...options });
 const message = (content) => ({ model: "coder-auto", messages: [{ role: "user", content }] });
 const classifierCorpus = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures/classifier-corpus.json"), "utf8"));
-const openHandsTools = ["terminal", "file_editor", "browser", "task_tracker", "canvas_ui_control", "search", "git", "python", "node", "docker", "planner", "workspace"].map((name) => ({ type: "function", function: { name, description: `Sanitized ${name} tool`, parameters: { type: "object", properties: {} } } }));
+const openHandsToolSchema = { type: "object", properties: { instructions: { type: "string", description: "Tool-schema boilerplate. ".repeat(80) } } };
+const openHandsTools = Array.from({ length: 43 }, (_, index) => ({ type: "function", function: { name: `openhands_tool_${index}`, description: `Sanitized OpenHands tool ${index}`, parameters: openHandsToolSchema } }));
 const harness = (request) => ({ model: "coder-auto", stream: true, tools: openHandsTools, messages: [
-  { role: "system", content: "You are a software engineering agent. Inspect the repository, preserve request bodies and tools, and make focused changes.".repeat(12) },
+  { role: "system", content: "You are a software engineering agent. Inspect the repository, preserve request bodies and tools, and make focused changes. ".repeat(250) },
   { role: "system", content: "Workspace: /workspace/project. Follow project instructions. Do not expose credentials. Use repository tests." },
   { role: "user", content: request },
 ] });
@@ -81,7 +82,7 @@ test("nested request wrappers use their canonical tool or function collection", 
   assert.equal(classifyTaskComplexity(easy).metadata.tools, 1);
   assert.equal(classifyTaskComplexity(easy).level, "easy");
   assert.equal(classifyTaskComplexity(functions).metadata.tools, 16);
-  assert.ok(classifyTaskComplexity(functions).reasons.includes("large-toolset"));
+  assert.ok(!classifyTaskComplexity(functions).reasons.includes("large-toolset"));
   assert.equal(classifyTaskComplexity(outerOnly).metadata.tools, 0);
 });
 
@@ -100,17 +101,34 @@ test("numeric configuration accepts documented boundaries and rejects adjacent v
   }
 });
 
-test("realistic OpenHands toolset does not make a simple request hard", () => {
-  const body = harness("Rename this variable in src/foo.js");
+test("large static OpenHands envelope routes a trivial task to coder", () => {
+  const body = harness("test");
   const result = classifyTaskComplexity(body);
+  assert.equal(JSON.stringify(body).length > 90000, true);
   assert.equal(result.level, "easy"); assert.equal(selectRoute(body, "coder-auto").target, "coder");
-  assert.ok(result.score < 6); assert.ok(result.reasons.includes("tools-present"));
+  assert.equal(result.score, 0); assert.deepEqual(result.reasons, []);
+  assert.equal(result.metadata.chars, 4); assert.equal(result.metadata.messages, 1); assert.equal(result.metadata.tools, 43);
+  assert.equal(result.metadata.systemMessages, 2); assert.ok(result.metadata.systemChars >= router.DEFAULTS.longContextChars);
 });
-test("realistic OpenHands hard audit routes coder-high with bounded reasons", () => {
-  const body = harness("Fully audit the concurrency and revision implementation and identify race conditions.");
+test("large static OpenHands envelope still routes complex coding work to coder-high", () => {
+  const body = harness("Investigate and debug the intermittent failing tests, implement the multi-file fix, and verify the regression suite.");
   const result = classifyTaskComplexity(body);
   assert.equal(result.level, "hard"); assert.equal(selectRoute(body, "coder-auto").target, "coder-high");
-  assert.ok(result.score <= 7); assert.deepEqual(result.reasons.filter((reason) => ["audit", "concurrency"].includes(reason)), ["audit", "concurrency"]);
+  assert.ok(result.reasons.includes("root-cause")); assert.ok(result.reasons.includes("architecture"));
+  assert.ok(!result.reasons.includes("large-context"));
+});
+test("short OpenHands follow-up keeps meaningful complex history", () => {
+  const body = harness("fix it");
+  for (let index = 0; index < 4; index += 1) {
+    body.messages.splice(-1, 0,
+      { role: "assistant", tool_calls: [{ id: `call_${index}`, type: "function", function: { name: "terminal", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: `call_${index}`, content: "failing test diagnostics ".repeat(800) },
+    );
+  }
+  const result = classifyTaskComplexity(body);
+  assert.equal(result.level, "hard"); assert.equal(selectRoute(body, "coder-auto").target, "coder-high");
+  assert.ok(result.reasons.includes("substantial-tool-history"));
+  assert.ok(result.reasons.includes("large-tool-result-history"));
 });
 test("actual tool activity and accumulated history outweigh available tools", () => {
   const body = harness("The tests still fail; continue debugging.");
