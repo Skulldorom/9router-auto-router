@@ -92,7 +92,7 @@ Strategy selection stays on the combo card. Auto Router details stay in **Edit C
 
 ### 4. Use it
 
-Point OpenHands, VS Code, or any other OpenAI-compatible client at 9Router as usual and use the Auto Router combo as the model:
+Point any OpenAI-compatible client at 9Router as usual and use the Auto Router combo as the model:
 
 ```text
 model: coder-auto
@@ -100,7 +100,15 @@ model: coder-auto
 
 Auto Router now decides whether each request should go to `coder` or `coder-high`. Everything after that decision is normal 9Router routing.
 
-When configured for Jev routing, sticky selections are scoped to the API-key-scoped client identity and a recognized conversation/session/thread ID. The raw Authorization value is never logged or stored as a cache key. Requests without both identities remain non-sticky.
+Jev Sticky + Upgrade requires a valid request/API-key identity and a stable conversation identity. The preferred client integration is the client-agnostic canonical header:
+
+```text
+X-9Router-Conversation-ID: <opaque stable conversation ID>
+```
+
+Header names are case-insensitive. `X-Conversation-ID`, `X-Session-ID`, and `X-Thread-ID` are also supported. For compatible request bodies, 9Router recognizes top-level `conversation_id`/`conversationId`, `session_id`/`sessionId`, and `thread_id`/`threadId`; nested `conversation.id`, `session.id`, or `thread.id`; and the same six fields in `metadata`.
+
+Sticky selections are scoped to the combo, a hashed API-key-scoped client identity, and the resolved conversation identity. The raw Authorization value and raw conversation header value are never logged; the Authorization value is never stored as a cache key. Clients without a supported conversation identity remain stateless for Jev routing.
 
 ## How it works
 

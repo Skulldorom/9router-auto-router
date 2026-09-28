@@ -672,13 +672,55 @@ test("Jev rejects self-referencing and Auto Router candidates", async () => {
 
 const jevStrategy = { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } };
 const stickyBody = (content, conversationId = "conversation") => ({ ...message(content), conversation_id: conversationId });
-async function stickyRoute({ body, decide, models = ["cheap", "coder", "coder-high", "premium"], now = 0, logs = [] }) {
+async function stickyRoute({ body, decide, models = ["cheap", "coder", "coder-high", "premium"], clientIdentity = "Bearer test-client", conversationHeaders, now = 0, logs = [] }) {
   return router.routeAutoCombo({
-    body, comboName: "auto", models, comboStrategies: jevStrategy, clientIdentity: "Bearer test-client", now,
+    body, comboName: "auto", models, comboStrategies: jevStrategy, clientIdentity, conversationHeaders, now,
     log: { info: (...entry) => logs.push(entry.join(" ")), warn() {} }, decide,
     delegate: (_body, target) => new Response(target),
   });
 }
+
+test("conversation identity resolver uses canonical and generic header precedence case-insensitively", () => {
+  const body = { conversation_id: "body-value", conversation: { id: "nested-value" }, metadata: { session_id: "metadata-value" } };
+  assert.equal(router.resolveConversationIdentity({ body, headers: { "X-9Router-Conversation-ID": "canonical-header", "x-conversation-id": "generic-header" } }), "canonical-header");
+  assert.equal(router.resolveConversationIdentity({ body, headers: { "x-9router-conversation-id": "canonical-lower" } }), "canonical-lower");
+  assert.equal(router.resolveConversationIdentity({ body, headers: { "X-Conversation-ID": "generic-header" } }), "generic-header");
+  assert.equal(router.resolveConversationIdentity({ body: { sessionId: "session" }, headers: { "x-session-id": "header-session" } }), "header-session");
+  assert.equal(router.resolveConversationIdentity({ body: { threadId: "thread" }, headers: { "X-Thread-ID": "header-thread" } }), "header-thread");
+});
+
+test("conversation identity resolver supports generic body forms without deriving identity", () => {
+  for (const [body, expected] of [
+    [{ conversation_id: "conversation-snake" }, "conversation-snake"], [{ conversationId: "conversation-camel" }, "conversation-camel"],
+    [{ session_id: "session-snake" }, "session-snake"], [{ sessionId: "session-camel" }, "session-camel"],
+    [{ thread_id: "thread-snake" }, "thread-snake"], [{ threadId: "thread-camel" }, "thread-camel"],
+    [{ conversation: { id: "nested-conversation" } }, "nested-conversation"], [{ session: { id: "nested-session" } }, "nested-session"], [{ thread: { id: "nested-thread" } }, "nested-thread"],
+    [{ metadata: { conversation_id: "metadata-conversation" } }, "metadata-conversation"], [{ metadata: { sessionId: "metadata-session" } }, "metadata-session"], [{ metadata: { thread_id: "metadata-thread" } }, "metadata-thread"],
+  ]) assert.equal(router.resolveConversationIdentity({ body }), expected);
+  assert.equal(router.resolveConversationIdentity({ body: { messages: [{ role: "user", content: "do not derive identity" }] } }), null);
+});
+
+test("Jev header identity isolates conversation API key and combo sticky state", async () => {
+  const choices = ["candidate_2", "candidate_4", "candidate_3", "candidate_1"];
+  let decisions = 0;
+  const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: choices.shift() } } }; };
+  const route = (conversationHeaders, clientIdentity = "Bearer key-A", comboName = "auto") => router.routeAutoCombo({
+    body: message("Rename one label."), comboName, models: ["cheap", "coder", "coder-high", "premium"],
+    comboStrategies: { [comboName]: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } },
+    clientIdentity, conversationHeaders, now: 50, log: { info() {}, warn() {} }, decide,
+    delegate: (_body, target) => new Response(target),
+  });
+  assert.deepEqual(await Promise.all([(await route({ "X-9Router-Conversation-ID": "same" })).text(), (await route({ "x-9router-conversation-id": "same" })).text(), (await route({ "X-9Router-Conversation-ID": "different" })).text(), (await route({ "X-9Router-Conversation-ID": "same" }, "Bearer key-B")).text(), (await route({ "X-9Router-Conversation-ID": "same" }, "Bearer key-A", "other")).text()]), ["coder", "coder", "premium", "coder-high", "cheap"]);
+  assert.equal(decisions, 4);
+});
+
+test("Jev canonical header wins over conflicting body identity", async () => {
+  let decisions = 0;
+  const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: "candidate_2" } } }; };
+  await stickyRoute({ body: stickyBody("Rename one label.", "body-value"), conversationHeaders: { "X-9Router-Conversation-ID": "canonical-value" }, decide, now: 60 });
+  await stickyRoute({ body: stickyBody("Rename another label.", "different-body"), conversationHeaders: { "x-9router-conversation-id": "canonical-value" }, decide, now: 61 });
+  assert.equal(decisions, 1);
+});
 
 test("Jev stores an initial selection and reuses it for same-conversation follow-ups", async () => {
   let decisions = 0;

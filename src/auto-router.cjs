@@ -416,8 +416,6 @@ function candidateIndex(response, candidates, startIndex = 0) {
   if (!Number.isSafeInteger(index) || index < startIndex || index >= startIndex + candidates.length) throw new Error("invalid-candidate");
   return index - startIndex;
 }
-// The patched 9Router dispatcher exposes only body/model/request/header/API-key arguments;
-// it has no AbortSignal path into provider execution. Do not add a parallel dispatcher here.
 function deadline(promise, timeoutMs, timers = globalThis) {
   let timeout;
   const expired = new Promise((_, reject) => { timeout = timers.setTimeout(() => reject(new Error("timeout")), timeoutMs); });
@@ -450,31 +448,48 @@ function selectJevFallbackRoute(body, comboName, options = {}) {
   const index = classification.level === "easy" ? 0 : candidates.length - 1, target = candidates[index];
   return { target, index, candidates, classification, config };
 }
-function stableConversationId(body) {
-  const source = requestSource(body), containers = source === body ? [source] : [source, body];
-  const fieldValue = (value) => nonEmptyString(value) && value.trim().length <= 256 ? value.trim() : null;
+const CONVERSATION_FIELDS = ["conversation_id", "conversationId", "session_id", "sessionId", "thread_id", "threadId"];
+const CONVERSATION_HEADERS = ["x-9router-conversation-id", "x-conversation-id", "x-session-id", "x-thread-id"];
+function conversationValue(value) { return nonEmptyString(value) && value.trim().length <= 256 ? value.trim() : null; }
+function headerConversationIdentities(headers) {
+  if (!headers || typeof headers !== "object") return [];
+  const values = new Map(), entries = typeof headers.entries === "function" ? headers.entries() : Object.entries(headers);
+  for (const [key, value] of entries) {
+    const normalized = key.toLowerCase();
+    if (CONVERSATION_HEADERS.includes(normalized) && !values.has(normalized)) values.set(normalized, conversationValue(value));
+  }
+  return CONVERSATION_HEADERS.map((header) => values.get(header)).filter(Boolean);
+}
+function conversationContainers(body) {
+  const source = requestSource(body);
+  return source === body ? [body] : [body, source];
+}
+function resolveConversationIdentity({ body, headers } = {}) {
+  const header = headerConversationIdentities(headers)[0];
+  if (header) return header;
+  const containers = conversationContainers(body).filter((container) => container && typeof container === "object" && !Array.isArray(container));
+  for (const container of containers) for (const key of CONVERSATION_FIELDS) {
+    const value = conversationValue(own(container, key));
+    if (value) return value;
+  }
+  for (const container of containers) for (const key of ["conversation", "session", "thread"]) {
+    const nested = own(container, key), value = conversationValue(typeof nested === "object" && nested ? own(nested, "id") : nested);
+    if (value) return value;
+  }
   for (const container of containers) {
-    if (!container || typeof container !== "object" || Array.isArray(container)) continue;
-    for (const key of ["conversation_id", "conversationId", "session_id", "sessionId", "thread_id", "threadId"]) {
-      const value = fieldValue(own(container, key));
-      if (value) return value;
-    }
-    for (const key of ["conversation", "session", "thread"]) {
-      const value = own(container, key), id = fieldValue(typeof value === "object" && value ? own(value, "id") : value);
-      if (id) return id;
-    }
     const metadata = own(container, "metadata");
     if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) continue;
-    for (const key of ["conversation_id", "conversationId", "session_id", "sessionId", "thread_id", "threadId"]) {
-      const value = fieldValue(own(metadata, key));
+    for (const key of CONVERSATION_FIELDS) {
+      const value = conversationValue(own(metadata, key));
       if (value) return value;
     }
   }
   return null;
 }
+function stableConversationId(body) { return resolveConversationIdentity({ body }); }
 // Sticky routes require API-key-scoped client identity and a recognized conversation identity.
-function stickyKey(comboName, body, clientIdentity) {
-  const conversation = stableConversationId(body), client = nonEmptyString(clientIdentity);
+function stickyKey(comboName, body, clientIdentity, headers) {
+  const conversation = resolveConversationIdentity({ body, headers }), client = nonEmptyString(clientIdentity);
   return conversation && client ? `${comboName}\u0000${createHash("sha256").update(client).digest("hex")}\u0000${conversation}` : null;
 }
 function candidateSignature(candidates) { return JSON.stringify(candidates); }
@@ -512,7 +527,7 @@ function pendingSelection(key, signature, mode, startIndex, select) {
   return { promise: entry.promise, owner: true, entry, release() { if (jevStickyPending.get(key) === entry) jevStickyPending.delete(key); } };
 }
 function errorResponse(message) { return new Response(JSON.stringify({ error: { message: `AUTO-ROUTER: ${message}` } }), { status: 400, headers: { "Content-Type": "application/json" } }); }
-async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy, log, delegate, targetExists, models, decide, clientIdentity, now = Date.now() }) {
+async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy, log, delegate, targetExists, models, decide, clientIdentity, conversationHeaders, now = Date.now() }) {
   const active = body && typeof body === "object" ? activeAutoCombos.get(body) : null;
   if (active?.has(comboName)) {
     const message = `recursion blocked: combo "${comboName}" was reached again while resolving this request.`;
@@ -531,7 +546,7 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
       let prepared;
       try { prepared = jevOptions(comboName, { comboStrategies, globalStrategy, models }); }
       catch (error) { log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`); return errorResponse(error.message); }
-      cacheKey = stickyKey(comboName, body, clientIdentity);
+      cacheKey = stickyKey(comboName, body, clientIdentity, conversationHeaders);
       const signature = candidateSignature(prepared.candidates), sticky = readStickyRoute(cacheKey, prepared.candidates, now);
       if (sticky) {
         route = { target: sticky.target, index: sticky.index, candidates: prepared.candidates, config: prepared.config, classification: classifyTaskComplexity(body, prepared.config) };
@@ -598,4 +613,4 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   }
 }
 
-module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget, effectiveTargets, jevCandidates, jevRequest, candidateIndex, deadline, stableConversationId };
+module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget, effectiveTargets, jevCandidates, jevRequest, candidateIndex, deadline, stableConversationId, resolveConversationIdentity };
