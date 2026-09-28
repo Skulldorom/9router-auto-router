@@ -95,6 +95,9 @@ test("patcher dynamically discovers runtime and UI assets, patches once, and is 
   assert.equal((patched.match(/routeAutoCombo/g) || []).length, 2);
   assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,f,a,j\)/);
   assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,g,d,e\)/);
+  assert.match(patched, /decide:async\(decisionBody,decisionModel\)=>\{let context=f,headers=context\?\.headers\|\|\{\},authorization=headers\.authorization\|\|headers\.Authorization,request=a,response=await fetch\(new URL\("\/api\/v1\/systemone",request\.url\)/);
+  assert.match(patched, /body:JSON\.stringify\(\{\.\.\.decisionBody,model:decisionModel\}\)/);
+  assert.match(patched, /if\(!response\.ok\)throw Error\("decision-error"\)/);
   assert.match(patched, /const _arResolveu=\(0,r\.d_\);/);
   assert.match(patched, /const _arResolvef=\(0,h\.d_\);/);
   assert.equal(patch(dir, ["--check"]).status, 0);

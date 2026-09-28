@@ -184,7 +184,9 @@ function patchRuntime(target) {
     const forwarded = [...plan.forwarded];
     if (forwarded.length < 2) fail(`Runtime dispatch data-flow validation failed:\n  ${path.relative(appRoot, target)}\n\nSingle-model dispatch forwards insufficient arguments.`);
     forwarded[0] = "nextBody"; forwarded[1] = "target";
-    const patch = `if("auto"===${plan.strategy})return require("/opt/9router-auto-router/auto-router.cjs").routeAutoCombo({body:${plan.body},comboName:${plan.comboName},comboStrategies:${plan.strategies},globalStrategy:${plan.settings}.comboStrategy,models:${plan.models},log:${plan.log},targetExists:async(name)=>Boolean(await ${capture}(name)),delegate:(nextBody,target)=>${plan.delegate}(${forwarded.join(",")}),decide:(decisionBody,decisionModel)=>${plan.delegate}(${forwarded.map((value,index)=>index === 0 ? "decisionBody" : index === 1 ? "decisionModel" : value).join(",")})});`;
+    const requestContext = forwarded[2];
+    const originalRequest = forwarded[3];
+    const patch = `if("auto"===${plan.strategy})return require("/opt/9router-auto-router/auto-router.cjs").routeAutoCombo({body:${plan.body},comboName:${plan.comboName},comboStrategies:${plan.strategies},globalStrategy:${plan.settings}.comboStrategy,models:${plan.models},log:${plan.log},targetExists:async(name)=>Boolean(await ${capture}(name)),delegate:(nextBody,target)=>${plan.delegate}(${forwarded.join(",")}),decide:async(decisionBody,decisionModel)=>{let context=${requestContext},headers=context?.headers||{},authorization=headers.authorization||headers.Authorization,request=${originalRequest},response=await fetch(new URL("/api/v1/systemone",request.url),{method:"POST",headers:{"Content-Type":"application/json",...(authorization?{Authorization:authorization}:{})},body:JSON.stringify({...decisionBody,model:decisionModel})});if(!response.ok)throw Error("decision-error");return response}});`;
     source = `${source.slice(0, anchorIndex)}${patch}${source.slice(anchorIndex)}`;
   }
   if (count(source, runtimeMarker) !== 1 || count(source, "routeAutoCombo") !== 2) fail(`Runtime patch integrity failed:\n  ${path.relative(appRoot, target)}`);

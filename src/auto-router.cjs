@@ -355,6 +355,7 @@ function jevCandidates(models) {
   if (!Array.isArray(models)) throw new Error("Jev requires at least two valid candidate models.");
   const candidates = models.map(nonEmptyString);
   if (candidates.length < 2 || candidates.some((candidate) => !candidate)) throw new Error("Jev requires at least two valid candidate models.");
+  if (candidates.length > 255) throw new Error("Jev supports at most 255 candidates.");
   if (new Set(candidates).size !== candidates.length) throw new Error("Jev candidates must be distinct.");
   return candidates;
 }
@@ -368,35 +369,40 @@ function selectRoute(body, comboName, { env = process.env, comboStrategies = {},
 }
 function truncate(value, limit) { return value.length > limit ? `${value.slice(0, limit)}…` : value; }
 function jevRequest(body, candidates) {
-  const state = inspectRequest(body);
-  const latest = truncate(state.userTexts.at(-1) || "", 4000);
-  const previous = state.userTexts.slice(-3, -1).map((text) => truncate(text, 600)).filter(Boolean);
-  const summary = [
-    "Select the lowest numbered candidate that can reliably complete the request. Return only its integer index.",
-    ...candidates.map((candidate, index) => `Candidate ${index + 1}: ${candidate} (tier ${index + 1}${index === 0 ? ", lowest cost/capability" : index === candidates.length - 1 ? ", highest cost/capability" : ""})`),
-    `Request metadata: messages=${state.messageCount}; chars=${state.chars}; system_messages=${state.systemMessages}; system_chars=${state.systemChars}; tool_calls=${state.toolCalls}; tool_results=${state.toolResults}; tool_result_chars=${state.toolResultChars}; modalities=${state.modalities}.`,
+  const inspected = inspectRequest(body);
+  const latest = truncate(inspected.userTexts.at(-1) || "", 4000);
+  const previous = inspected.userTexts.slice(-3, -1).map((text) => truncate(text, 600)).filter(Boolean);
+  const state = [
+    `Request metadata: messages=${inspected.messageCount}; chars=${inspected.chars}; system_messages=${inspected.systemMessages}; system_chars=${inspected.systemChars}; tool_calls=${inspected.toolCalls}; tool_results=${inspected.toolResults}; tool_result_chars=${inspected.toolResultChars}; modalities=${inspected.modalities}.`,
     previous.length ? `Relevant previous user context:\n${previous.join("\n")}` : "",
     `Current user request:\n${latest || "(no extractable user text)"}`,
   ].filter(Boolean).join("\n\n");
-  return { model: "", stream: false, temperature: 0, max_tokens: 8, messages: [{ role: "system", content: "You are a routing classifier. Choose only from the supplied candidates." }, { role: "user", content: summary }] };
+  const criteria = Object.fromEntries(candidates.map((candidate, index) => [`candidate_${index + 1}`, `Candidate ${index + 1}: ${candidate}. Tier ${index + 1}${index === 0 ? "; lowest cost and capability" : index === candidates.length - 1 ? "; highest cost and capability" : ""}.`]));
+  return {
+    model: "",
+    state,
+    questions: {
+      candidate: {
+        type: "choice",
+        instructions: "Select the lowest-tier candidate that is sufficiently capable to complete the request reliably. Choose only from these candidates.",
+        criteria,
+      },
+    },
+  };
 }
-async function responseText(response) {
-  if (typeof response === "string") return response;
+async function responseJson(response) {
   if (!response || typeof response !== "object") throw new Error("invalid-response");
-  const direct = response?.choices?.[0]?.message?.content ?? response?.choices?.[0]?.text ?? response?.output_text ?? response?.message?.content ?? response?.response;
-  if (typeof direct === "string") return direct;
+  if (typeof response.json === "function") return response.json();
   if (typeof response.text === "function") {
     const raw = await response.text();
-    try {
-      const parsed = JSON.parse(raw);
-      const content = parsed?.choices?.[0]?.message?.content ?? parsed?.choices?.[0]?.text ?? parsed?.output_text ?? parsed?.message?.content ?? parsed?.response;
-      return typeof content === "string" ? content : raw;
-    } catch { return raw; }
+    try { return JSON.parse(raw); } catch { throw new Error("invalid-response"); }
   }
-  return typeof response.content === "string" ? response.content : "";
+  return response;
 }
-function candidateIndex(value, candidates) {
-  const match = /^\s*(\d+)\s*$/.exec(value);
+function candidateIndex(response, candidates) {
+  const answer = response?.answers?.candidate;
+  const choice = answer?.type === "choice" ? answer.choice : null;
+  const match = typeof choice === "string" ? /^candidate_(\d+)$/.exec(choice) : null;
   if (!match) throw new Error("invalid-output");
   const index = Number(match[1]);
   if (!Number.isSafeInteger(index) || index < 1 || index > candidates.length) throw new Error("invalid-candidate");
@@ -421,8 +427,8 @@ async function selectJevRoute({ body, comboName, comboStrategies, globalStrategy
   if (typeof decide !== "function") throw new Error("decision-error");
   const request = jevRequest(body, candidates);
   request.model = config.jev.decisionModel;
-  const text = await deadline(decide(request, config.jev.decisionModel), config.jev.timeoutMs);
-  const index = candidateIndex(await responseText(text), candidates);
+  const response = await deadline(decide(request, config.jev.decisionModel), config.jev.timeoutMs);
+  const index = candidateIndex(await responseJson(response), candidates);
   return { target: candidates[index], index, candidates, config };
 }
 function errorResponse(message) { return new Response(JSON.stringify({ error: { message: `AUTO-ROUTER: ${message}` } }), { status: 400, headers: { "Content-Type": "application/json" } }); }

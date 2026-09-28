@@ -551,24 +551,33 @@ test("legacy target configuration remains effective until UI normalization", () 
 });
 test("missing ordered models return a controlled runtime configuration error", async () => { const response = await router.routeAutoCombo({ body: message("hello"), comboName: "auto", comboStrategies: {}, models: ["only"], log: { info() {}, warn() {} }, delegate: () => new Response("unexpected") }); assert.equal(response.status, 400); assert.match((await response.json()).error.message, /requires two distinct usable models/); });
 
-test("Jev selects validated ordered candidates and delegates through the normal target path", async () => {
-  const delegated = [];
+test("Jev sends a native System One choice request and delegates its validated selection", async () => {
+  const delegated = [], requests = [];
   const log = { info() {}, warn() {} };
-  for (const [selection, expected] of [["1", "cheap"], ["2", "coder"], ["4", "premium"]]) {
+  for (const [selection, expected] of [["candidate_1", "cheap"], ["candidate_2", "coder"], ["candidate_4", "premium"]]) {
     const response = await router.routeAutoCombo({
       body: message("Implement the request"), comboName: "auto", models: ["cheap", "coder", "strong", "premium"],
       comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } }, log,
-      decide: async () => ({ choices: [{ message: { content: selection } }] }),
+      decide: async (request) => { requests.push(request); return { answers: { candidate: { type: "choice", choice: selection } } }; },
       delegate: (body, target) => { delegated.push({ body, target }); return new Response(target); },
     });
     assert.equal(await response.text(), expected);
   }
   assert.deepEqual(delegated.map(({ target }) => target), ["cheap", "coder", "premium"]);
   assert.ok(delegated.every(({ body }) => body.messages[0].content === "Implement the request"));
+  assert.ok(requests.every((request) => request.model === "judge" && typeof request.state === "string"));
+  assert.ok(requests.every((request) => request.questions?.candidate?.type === "choice"));
+  assert.ok(requests.every((request) => !Object.hasOwn(request, "messages") && !Object.hasOwn(request, "stream") && !Object.hasOwn(request, "max_tokens")));
+  assert.deepEqual(requests[0].questions.candidate.criteria, {
+    candidate_1: "Candidate 1: cheap. Tier 1; lowest cost and capability.",
+    candidate_2: "Candidate 2: coder. Tier 2.",
+    candidate_3: "Candidate 3: strong. Tier 3.",
+    candidate_4: "Candidate 4: premium. Tier 4; highest cost and capability.",
+  });
 });
 
 test("Jev failures safely fall back to the unchanged local classifier", async () => {
-  const failures = [undefined, async () => { throw new Error("provider down"); }, async () => "bad output", async () => "9", () => new Promise(() => {})];
+  const failures = [undefined, async () => { throw new Error("provider down"); }, async () => "bad output", async () => "9", async () => ({ answers: { candidate: { type: "score", choice: "candidate_2" } } }), () => new Promise(() => {})];
   for (const decide of failures) {
     const delegated = [], logs = [];
     await router.routeAutoCombo({
@@ -602,15 +611,20 @@ test("Jev timeout clears its timer while the uncancellable dispatcher settles in
   release("1");
 });
 
-test("Jev validates candidate pools and sanitizes bounded decision requests", () => {
+test("Jev validates candidate pools and sanitizes bounded native System One requests", () => {
   assert.throws(() => router.jevCandidates(["a"]), /at least two/);
   assert.throws(() => router.jevCandidates(["a", "a"]), /distinct/);
+  assert.throws(() => router.jevCandidates(Array.from({ length: 256 }, (_, index) => `model-${index}`)), /at most 255/);
   const request = router.jevRequest({ messages: [{ role: "system", content: "secret-system" }, { role: "user", content: "x".repeat(6000) }], tools: [{ function: { name: "secret-tool", description: "x".repeat(50000) } }] }, ["cheap", "strong"]);
-  const content = request.messages[1].content;
-  assert.ok(content.includes("Candidate 1: cheap"));
-  assert.match(content, /system_messages=1; system_chars=13/);
-  assert.ok(content.length < 5500);
-  assert.ok(!content.includes("secret-system") && !content.includes("secret-tool"));
+  assert.equal(request.questions.candidate.type, "choice");
+  assert.deepEqual(request.questions.candidate.criteria, {
+    candidate_1: "Candidate 1: cheap. Tier 1; lowest cost and capability.",
+    candidate_2: "Candidate 2: strong. Tier 2; highest cost and capability.",
+  });
+  assert.match(request.state, /system_messages=1; system_chars=13/);
+  assert.ok(request.state.length < 5500);
+  assert.ok(!request.state.includes("secret-system") && !request.state.includes("secret-tool"));
+  assert.ok(!Object.hasOwn(request, "messages") && !Object.hasOwn(request, "temperature"));
 });
 
 test("Jev sanitizes a large OpenHands envelope and fallback preserves local meaningful-context routing", async () => {
@@ -622,18 +636,18 @@ test("Jev sanitizes a large OpenHands envelope and fallback preserves local mean
     decide: async (request) => { requests.push(request); throw new Error("unavailable"); },
     delegate: (sent, target) => { delegated.push({ sent, target }); return new Response("ok"); },
   });
-  const content = requests[0].messages[1].content;
+  const { state } = requests[0];
   assert.equal(await response.text(), "ok");
   assert.deepEqual(delegated.map(({ target }) => target), ["easy"]);
   assert.equal(delegated[0].sent, body);
-  assert.match(content, /messages=1; chars=4; system_messages=2; system_chars=/);
-  assert.match(content, /tool_calls=0; tool_results=0/);
-  assert.ok(content.length < 5500);
-  assert.ok(!content.includes("You are a software engineering agent") && !content.includes("openhands_tool_0"));
+  assert.match(state, /messages=1; chars=4; system_messages=2; system_chars=/);
+  assert.match(state, /tool_calls=0; tool_results=0/);
+  assert.ok(state.length < 5500);
+  assert.ok(!state.includes("You are a software engineering agent") && !state.includes("openhands_tool_0"));
 });
 
 test("Jev rejects self-referencing and Auto Router candidates", async () => {
-  const base = { body: message("hello"), comboName: "auto", log: { info() {}, warn() {} }, decide: async () => "1", delegate: () => new Response("unexpected") };
+  const base = { body: message("hello"), comboName: "auto", log: { info() {}, warn() {} }, decide: async () => ({ answers: { candidate: { choice: "candidate_1" } } }), delegate: () => new Response("unexpected") };
   const self = await router.routeAutoCombo({ ...base, models: ["auto", "ordinary"], comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } } });
   assert.equal(self.status, 400);
   const chained = await router.routeAutoCombo({ ...base, models: ["next-auto", "ordinary"], comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } }, "next-auto": { fallbackStrategy: "auto" } } });
