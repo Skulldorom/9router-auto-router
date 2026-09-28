@@ -402,8 +402,12 @@ function candidateIndex(value, candidates) {
   if (!Number.isSafeInteger(index) || index < 1 || index > candidates.length) throw new Error("invalid-candidate");
   return index - 1;
 }
-function deadline(promise, timeoutMs) {
-  return Promise.race([Promise.resolve(promise), new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs))]);
+// The patched 9Router dispatcher exposes only body/model/request/header/API-key arguments;
+// it has no AbortSignal path into provider execution. Do not add a parallel dispatcher here.
+function deadline(promise, timeoutMs, timers = globalThis) {
+  let timeout;
+  const expired = new Promise((_, reject) => { timeout = timers.setTimeout(() => reject(new Error("timeout")), timeoutMs); });
+  return Promise.race([Promise.resolve(promise), expired]).finally(() => timers.clearTimeout(timeout));
 }
 function failureReason(error) {
   const message = error instanceof Error ? error.message : String(error);
@@ -469,4 +473,4 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   }
 }
 
-module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget, effectiveTargets, jevCandidates, jevRequest, candidateIndex };
+module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget, effectiveTargets, jevCandidates, jevRequest, candidateIndex, deadline };

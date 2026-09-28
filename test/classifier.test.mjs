@@ -582,6 +582,26 @@ test("Jev failures safely fall back to the unchanged local classifier", async ()
   }
 });
 
+test("Jev timeout clears its timer while the uncancellable dispatcher settles independently", async () => {
+  const timers = { scheduled: [], cleared: [], setTimeout(callback) { this.scheduled.push(callback); return this.scheduled.length; }, clearTimeout(id) { this.cleared.push(id); } };
+  assert.equal(await router.deadline(Promise.resolve("1"), 100, timers), "1");
+  assert.deepEqual(timers.cleared, [1]);
+  const never = router.deadline(new Promise(() => {}), 100, timers);
+  timers.scheduled[1]();
+  await assert.rejects(never, /timeout/);
+  assert.deepEqual(timers.cleared, [1, 2]);
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  const fallback = router.routeAutoCombo({
+    body: message("hello"), comboName: "auto", models: ["easy", "hard"],
+    comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge", timeoutMs: 100 } } } },
+    log: { info() {}, warn() {} }, decide: () => pending, delegate: (_body, target) => new Response(target),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 110));
+  assert.equal(await (await fallback).text(), "easy");
+  release("1");
+});
+
 test("Jev validates candidate pools and sanitizes bounded decision requests", () => {
   assert.throws(() => router.jevCandidates(["a"]), /at least two/);
   assert.throws(() => router.jevCandidates(["a", "a"]), /distinct/);
