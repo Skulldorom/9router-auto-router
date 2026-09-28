@@ -472,6 +472,7 @@ function stableConversationId(body) {
   }
   return null;
 }
+// Sticky routes require API-key-scoped client identity and a recognized conversation identity.
 function stickyKey(comboName, body, clientIdentity) {
   const conversation = stableConversationId(body), client = nonEmptyString(clientIdentity);
   return conversation && client ? `${comboName}\u0000${createHash("sha256").update(client).digest("hex")}\u0000${conversation}` : null;
@@ -493,12 +494,22 @@ function readStickyRoute(key, candidates, now) {
   entry.hardScore = Number.isFinite(entry.hardScore) ? entry.hardScore : 0;
   return entry;
 }
-function writeStickyRoute(key, route, now) {
-  if (!key) return;
+function writeStickyRoute(key, route, now, pending) {
+  if (!key || (pending && jevStickyPending.get(key) !== pending)) return;
+  const signature = candidateSignature(route.candidates), existing = jevStickyRoutes.get(key);
+  if (existing && existing.signature !== signature) return;
   cleanupStickyRoutes(now);
   jevStickyRoutes.delete(key);
-  jevStickyRoutes.set(key, { target: route.target, index: route.index, signature: candidateSignature(route.candidates), hardScore: route.classification?.level === "hard" ? route.classification.score : 0, expiresAt: now + JEV_STICKY_TTL_MS });
+  jevStickyRoutes.set(key, { target: route.target, index: route.index, signature, hardScore: route.classification?.level === "hard" ? route.classification.score : 0, expiresAt: now + JEV_STICKY_TTL_MS });
   cleanupStickyRoutes(now);
+}
+function pendingSelection(key, signature, mode, startIndex, select) {
+  if (!key) return { promise: Promise.resolve().then(select), owner: true, entry: null, release() {} };
+  const pending = jevStickyPending.get(key);
+  if (pending && pending.signature === signature && pending.mode === mode && pending.startIndex === startIndex) return { promise: pending.promise, owner: false, entry: pending, release() {} };
+  const entry = { signature, mode, startIndex, promise: Promise.resolve().then(select) };
+  jevStickyPending.set(key, entry);
+  return { promise: entry.promise, owner: true, entry, release() { if (jevStickyPending.get(key) === entry) jevStickyPending.delete(key); } };
 }
 function errorResponse(message) { return new Response(JSON.stringify({ error: { message: `AUTO-ROUTER: ${message}` } }), { status: 400, headers: { "Content-Type": "application/json" } }); }
 async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy, log, delegate, targetExists, models, decide, clientIdentity, now = Date.now() }) {
@@ -511,33 +522,39 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   const nextActive = active || new Set();
   if (body && typeof body === "object") activeAutoCombos.set(body, nextActive);
   nextActive.add(comboName);
+  let releasePending = null, pendingEntry = null;
   try {
     const persisted = comboStrategies?.[comboName]?.autoRouter;
     const method = getConfig(process.env, persisted).method;
-    let route, source = "local", failure = null, previousIndex = null, cacheKey = null;
+    let route, source = "local", failure = null, previousIndex = null, cacheKey = null, pendingOwner = false;
     if (method === "jev") {
       let prepared;
       try { prepared = jevOptions(comboName, { comboStrategies, globalStrategy, models }); }
       catch (error) { log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`); return errorResponse(error.message); }
       cacheKey = stickyKey(comboName, body, clientIdentity);
-      const sticky = readStickyRoute(cacheKey, prepared.candidates, now);
+      const signature = candidateSignature(prepared.candidates), sticky = readStickyRoute(cacheKey, prepared.candidates, now);
       if (sticky) {
         route = { target: sticky.target, index: sticky.index, candidates: prepared.candidates, config: prepared.config, classification: classifyTaskComplexity(body, prepared.config) };
         if (route.classification.level === "hard" && route.classification.score > sticky.hardScore && route.index < route.candidates.length - 1) {
           previousIndex = route.index;
-          const classification = route.classification;
-          try {
-            route = await selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, startIndex: previousIndex, prepared });
-            route.classification = classification;
-            source = "jev-upgrade";
-          } catch (error) {
-            failure = failureReason(error);
-            sticky.hardScore = route.classification.score;
-            source = "sticky";
-          }
+          const classification = route.classification, retained = route;
+          const selection = pendingSelection(cacheKey, signature, "upgrade", previousIndex, async () => {
+            try {
+              const selected = await selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, startIndex: previousIndex, prepared });
+              selected.classification = classification;
+              return { route: selected, source: "jev-upgrade", failure: null };
+            } catch (error) {
+              sticky.hardScore = classification.score;
+              return { route: retained, source: "sticky", failure: failureReason(error) };
+            }
+          });
+          pendingOwner = selection.owner;
+          releasePending = selection.release;
+          pendingEntry = selection.entry;
+          ({ route, source, failure } = await selection.promise);
         } else source = "sticky";
       } else {
-        const selectInitial = async () => {
+        const selection = pendingSelection(cacheKey, signature, "initial", 0, async () => {
           try {
             const selected = await selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, prepared });
             selected.classification = classifyTaskComplexity(body, prepared.config);
@@ -546,18 +563,11 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
             const fallbackFailure = failureReason(error);
             return { route: selectJevFallbackRoute(body, comboName, { comboStrategies, globalStrategy, models }), source: "local-fallback", failure: fallbackFailure };
           }
-        };
-        const pending = cacheKey && jevStickyPending.get(cacheKey);
-        if (pending) {
-          ({ route, failure } = await pending);
-          source = "sticky";
-        } else {
-          const selection = selectInitial();
-          if (cacheKey) jevStickyPending.set(cacheKey, selection);
-          try { ({ route, source, failure } = await selection); }
-          catch (error) { log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`); return errorResponse(error.message); }
-          finally { if (cacheKey) jevStickyPending.delete(cacheKey); }
-        }
+        });
+        pendingOwner = selection.owner;
+        releasePending = selection.release;
+        pendingEntry = selection.entry;
+        ({ route, source, failure } = await selection.promise);
       }
     } else {
       try { route = selectRoute(body, comboName, { comboStrategies, globalStrategy, models }); }
@@ -573,7 +583,7 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
         return errorResponse(message);
       }
     }
-    if (cacheKey && (source === "jev" || source === "jev-upgrade" || source === "local-fallback")) writeStickyRoute(cacheKey, route, now);
+    if (pendingOwner && cacheKey && (source === "jev" || source === "jev-upgrade" || source === "local-fallback")) writeStickyRoute(cacheKey, route, now, pendingEntry);
     if (source === "jev") log.info("AUTO-ROUTER", `combo=${comboName} method=jev selected=${target} rank=${route.index + 1} source=jev sticky=new`);
     else if (source === "jev-upgrade") log.info("AUTO-ROUTER", `combo=${comboName} method=jev selected=${target} rank=${route.index + 1} source=jev-upgrade previous_rank=${previousIndex + 1}`);
     else if (source === "sticky") log.info("AUTO-ROUTER", `combo=${comboName} method=jev selected=${target} rank=${route.index + 1} source=sticky${failure ? ` reason=upgrade-${failure}` : ""}`);
@@ -582,6 +592,7 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
     if (config.verbose && route.classification) log.info("AUTO-ROUTER", `combo=${comboName} metadata=${JSON.stringify(route.classification.metadata)}`);
     return await delegate(body, target);
   } finally {
+    if (releasePending) releasePending();
     nextActive.delete(comboName);
     if (nextActive.size === 0 && body && typeof body === "object") activeAutoCombos.delete(body);
   }

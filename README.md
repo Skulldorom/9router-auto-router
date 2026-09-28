@@ -100,6 +100,8 @@ model: coder-auto
 
 Auto Router now decides whether each request should go to `coder` or `coder-high`. Everything after that decision is normal 9Router routing.
 
+When configured for Jev routing, sticky selections are scoped to the API-key-scoped client identity and a recognized conversation/session/thread ID. The raw Authorization value is never logged or stored as a cache key. Requests without both identities remain non-sticky.
+
 ## How it works
 
 Auto Router sits on top of normal 9Router combo handling. It does not replace 9Router's routing system.

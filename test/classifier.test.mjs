@@ -763,6 +763,84 @@ test("Jev sticky entries expire and invalidate on candidate configuration change
   assert.equal(calls, 4);
 });
 
+test("Jev pending initial decisions do not cross candidate configuration changes", async () => {
+  const decisions = [], oldModels = ["old-cheap", "old-coder", "old-premium"], newModels = ["new-cheap", "new-coder", "new-premium"];
+  let resolveOld, resolveNew;
+  const decide = () => new Promise((resolve) => { decisions.push(resolve); });
+  const oldRequest = stickyRoute({ body: stickyBody("Rename one label.", "pending-initial-mutation"), decide, models: oldModels, now: 750 });
+  await Promise.resolve();
+  const newRequest = stickyRoute({ body: stickyBody("Rename one label.", "pending-initial-mutation"), decide, models: newModels, now: 751 });
+  await Promise.resolve();
+  [resolveOld, resolveNew] = decisions;
+  assert.equal(decisions.length, 2);
+  resolveNew({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  resolveOld({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  assert.deepEqual([await (await oldRequest).text(), await (await newRequest).text()], ["old-coder", "new-coder"]);
+  const followUp = await stickyRoute({ body: stickyBody("Rename another label.", "pending-initial-mutation"), decide, models: newModels, now: 752 });
+  assert.equal(await followUp.text(), "new-coder");
+  assert.equal(decisions.length, 2);
+});
+
+test("Jev coalesces concurrent successful upgrades", async () => {
+  let decisions = 0, resolveUpgrade;
+  const decide = () => {
+    decisions += 1;
+    return decisions === 1 ? { answers: { candidate: { type: "choice", choice: "candidate_2" } } } : new Promise((resolve) => { resolveUpgrade = resolve; });
+  };
+  await stickyRoute({ body: stickyBody("Rename one label.", "concurrent-upgrade-success"), decide, now: 760 });
+  const first = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "concurrent-upgrade-success"), decide, now: 761 });
+  await Promise.resolve();
+  const second = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "concurrent-upgrade-success"), decide, now: 762 });
+  await Promise.resolve();
+  assert.equal(decisions, 2);
+  resolveUpgrade({ answers: { candidate: { type: "choice", choice: "candidate_3" } } });
+  assert.deepEqual([await (await first).text(), await (await second).text()], ["coder-high", "coder-high"]);
+  const easy = await stickyRoute({ body: stickyBody("Rename another label.", "concurrent-upgrade-success"), decide, now: 763 });
+  assert.equal(await easy.text(), "coder-high");
+  assert.equal(decisions, 2);
+});
+
+test("Jev coalesces concurrent failed upgrades", async () => {
+  let decisions = 0, rejectUpgrade;
+  const decide = () => {
+    decisions += 1;
+    return decisions === 1 ? { answers: { candidate: { type: "choice", choice: "candidate_2" } } } : new Promise((_, reject) => { rejectUpgrade = reject; });
+  };
+  await stickyRoute({ body: stickyBody("Rename one label.", "concurrent-upgrade-failure"), decide, now: 770 });
+  const first = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "concurrent-upgrade-failure"), decide, now: 771 });
+  await Promise.resolve();
+  const second = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "concurrent-upgrade-failure"), decide, now: 772 });
+  await Promise.resolve();
+  assert.equal(decisions, 2);
+  rejectUpgrade(new Error("provider down"));
+  assert.deepEqual([await (await first).text(), await (await second).text()], ["coder", "coder"]);
+  const easy = await stickyRoute({ body: stickyBody("Rename another label.", "concurrent-upgrade-failure"), decide, now: 773 });
+  assert.equal(await easy.text(), "coder");
+  assert.equal(decisions, 2);
+});
+
+test("Jev pending upgrades do not cross candidate configuration changes", async () => {
+  const oldModels = ["old-cheap", "old-coder", "old-premium"], newModels = ["new-cheap", "new-coder", "new-premium"];
+  const decisions = [];
+  const decide = () => new Promise((resolve) => { decisions.push(resolve); });
+  const initial = stickyRoute({ body: stickyBody("Rename one label.", "pending-upgrade-mutation"), decide, models: oldModels, now: 780 });
+  await Promise.resolve();
+  decisions.shift()({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  assert.equal(await (await initial).text(), "old-coder");
+  const oldUpgrade = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "pending-upgrade-mutation"), decide, models: oldModels, now: 781 });
+  await Promise.resolve();
+  const newInitial = stickyRoute({ body: stickyBody("Rename one label.", "pending-upgrade-mutation"), decide, models: newModels, now: 782 });
+  await Promise.resolve();
+  assert.equal(decisions.length, 2);
+  const [resolveOldUpgrade, resolveNewInitial] = decisions;
+  resolveNewInitial({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  resolveOldUpgrade({ answers: { candidate: { type: "choice", choice: "candidate_3" } } });
+  assert.deepEqual([await (await oldUpgrade).text(), await (await newInitial).text()], ["old-premium", "new-coder"]);
+  const followUp = await stickyRoute({ body: stickyBody("Rename another label.", "pending-upgrade-mutation"), decide, models: newModels, now: 783 });
+  assert.equal(await followUp.text(), "new-coder");
+  assert.equal(decisions.length, 2);
+});
+
 test("Jev does not retain state without a reliable conversation identity", async () => {
   let calls = 0;
   const decide = async () => ({ answers: { candidate: { type: "choice", choice: calls++ === 0 ? "candidate_2" : "candidate_3" } } });
