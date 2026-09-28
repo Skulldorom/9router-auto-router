@@ -669,3 +669,122 @@ test("Jev rejects self-referencing and Auto Router candidates", async () => {
   const chained = await router.routeAutoCombo({ ...base, models: ["next-auto", "ordinary"], comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } }, "next-auto": { fallbackStrategy: "auto" } } });
   assert.equal(chained.status, 400);
 });
+
+const jevStrategy = { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } };
+const stickyBody = (content, conversationId = "conversation") => ({ ...message(content), conversation_id: conversationId });
+async function stickyRoute({ body, decide, models = ["cheap", "coder", "coder-high", "premium"], now = 0, logs = [] }) {
+  return router.routeAutoCombo({
+    body, comboName: "auto", models, comboStrategies: jevStrategy, clientIdentity: "Bearer test-client", now,
+    log: { info: (...entry) => logs.push(entry.join(" ")), warn() {} }, decide,
+    delegate: (_body, target) => new Response(target),
+  });
+}
+
+test("Jev stores an initial selection and reuses it for same-conversation follow-ups", async () => {
+  let decisions = 0;
+  const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: "candidate_2" } } }; };
+  const first = await stickyRoute({ body: stickyBody("Rename one label.", "sticky-reuse"), decide, now: 100 });
+  const second = await stickyRoute({ body: stickyBody("Make the label blue.", "sticky-reuse"), decide, now: 101 });
+  const third = await stickyRoute({ body: stickyBody("Update its tooltip.", "sticky-reuse"), decide, now: 102 });
+  assert.deepEqual([await first.text(), await second.text(), await third.text()], ["coder", "coder", "coder"]);
+  assert.equal(decisions, 1);
+});
+
+test("Jev sticky state is isolated by explicit conversation identity", async () => {
+  const choices = ["candidate_2", "candidate_4"];
+  const decide = async () => ({ answers: { candidate: { type: "choice", choice: choices.shift() } } });
+  const a1 = await stickyRoute({ body: stickyBody("Rename one label.", "isolation-a"), decide, now: 200 });
+  const b1 = await stickyRoute({ body: stickyBody("Rename one label.", "isolation-b"), decide, now: 201 });
+  const a2 = await stickyRoute({ body: stickyBody("Adjust its label.", "isolation-a"), decide, now: 202 });
+  const b2 = await stickyRoute({ body: stickyBody("Adjust its label.", "isolation-b"), decide, now: 203 });
+  assert.deepEqual([await a1.text(), await b1.text(), await a2.text(), await b2.text()], ["coder", "premium", "coder", "premium"]);
+  assert.equal(choices.length, 0);
+});
+
+test("Jev upgrades only from the current tier and never downgrades", async () => {
+  const requests = [], logs = [];
+  const decide = async (request) => {
+    requests.push(request);
+    return { answers: { candidate: { type: "choice", choice: requests.length === 1 ? "candidate_2" : "candidate_3" } } };
+  };
+  const initial = await stickyRoute({ body: stickyBody("Rename one label.", "upgrade"), decide, now: 300, logs });
+  const upgrade = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "upgrade"), decide, now: 301, logs });
+  const easy = await stickyRoute({ body: stickyBody("Rename another label.", "upgrade"), decide, now: 302, logs });
+  assert.deepEqual([await initial.text(), await upgrade.text(), await easy.text()], ["coder", "coder-high", "coder-high"]);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(Object.keys(requests[1].questions.candidate.criteria), ["candidate_2", "candidate_3", "candidate_4"]);
+  assert.ok(logs.some((line) => line.includes("source=jev-upgrade previous_rank=2")));
+});
+
+test("Jev does not re-decide after reaching the strongest tier or equivalent hard score", async () => {
+  let decisions = 0;
+  const decide = async () => {
+    decisions += 1;
+    return { answers: { candidate: { type: "choice", choice: decisions === 1 ? "candidate_3" : "candidate_4" } } };
+  };
+  await stickyRoute({ body: stickyBody("Rename one label.", "strongest"), decide, now: 400 });
+  const firstHard = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "strongest"), decide, now: 401 });
+  const secondHard = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "strongest"), decide, now: 402 });
+  assert.equal(await firstHard.text(), "premium");
+  assert.equal(await secondHard.text(), "premium");
+  assert.equal(decisions, 2);
+});
+
+test("Jev initial and upgrade failures preserve safe sticky routes", async () => {
+  let initialCalls = 0;
+  const fallback = async () => { initialCalls += 1; throw new Error("provider down"); };
+  const hard = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "initial-failure"), decide: fallback, now: 500 });
+  const repeat = await stickyRoute({ body: stickyBody("Rename one label.", "initial-failure"), decide: fallback, now: 501 });
+  assert.equal(await hard.text(), "premium");
+  assert.equal(await repeat.text(), "premium");
+  assert.equal(initialCalls, 1);
+
+  let calls = 0; const logs = [];
+  const upgradeFailure = async () => {
+    calls += 1;
+    if (calls === 1) return { answers: { candidate: { type: "choice", choice: "candidate_2" } } };
+    throw new Error("provider down");
+  };
+  await stickyRoute({ body: stickyBody("Rename one label.", "upgrade-failure"), decide: upgradeFailure, now: 510, logs });
+  const retained = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "upgrade-failure"), decide: upgradeFailure, now: 511, logs });
+  assert.equal(await retained.text(), "coder");
+  assert.ok(logs.some((line) => line.includes("source=sticky reason=upgrade-decision-error")));
+});
+
+test("Jev sticky entries expire and invalidate on candidate configuration changes", async () => {
+  let calls = 0;
+  const decide = async () => ({ answers: { candidate: { type: "choice", choice: calls++ === 0 ? "candidate_2" : "candidate_1" } } });
+  await stickyRoute({ body: stickyBody("Rename one label.", "expiry"), decide, now: 600 });
+  const expired = await stickyRoute({ body: stickyBody("Rename one label.", "expiry"), decide, now: 600 + 30 * 60 * 1000 + 1 });
+  assert.equal(await expired.text(), "cheap");
+  await stickyRoute({ body: stickyBody("Rename one label.", "mutation"), decide, now: 700 });
+  const reordered = await stickyRoute({ body: stickyBody("Rename one label.", "mutation"), decide, models: ["coder", "cheap", "coder-high", "premium"], now: 701 });
+  assert.equal(await reordered.text(), "coder");
+  assert.equal(calls, 4);
+});
+
+test("Jev does not retain state without a reliable conversation identity", async () => {
+  let calls = 0;
+  const decide = async () => ({ answers: { candidate: { type: "choice", choice: calls++ === 0 ? "candidate_2" : "candidate_3" } } });
+  const first = await stickyRoute({ body: message("Rename one label."), decide, now: 800 });
+  const second = await stickyRoute({ body: message("Rename one label."), decide, now: 801 });
+  assert.deepEqual([await first.text(), await second.text()], ["coder", "coder-high"]);
+  assert.equal(calls, 2);
+});
+
+test("Jev recognizes documented wrapped and Responses conversation identifiers", () => {
+  assert.equal(router.stableConversationId({ request: { messages: [], metadata: { conversationId: "wrapped-conversation" } } }), "wrapped-conversation");
+  assert.equal(router.stableConversationId({ input: "continue", session_id: "responses-session" }), "responses-session");
+  assert.equal(router.stableConversationId({ messages: [{ role: "user", content: "x" }], thread: { id: "openhands-thread" } }), "openhands-thread");
+  assert.equal(router.stableConversationId(message("no identity")), null);
+});
+
+test("OpenHands-style repeated scaffolding reuses a Jev selection", async () => {
+  let decisions = 0;
+  const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: "candidate_2" } } }; };
+  const first = harness("Rename one label."); first.conversation_id = "openhands-sticky";
+  const second = harness("Rename another label."); second.conversation_id = "openhands-sticky";
+  const routed = await Promise.all([stickyRoute({ body: first, decide, now: 900 }), stickyRoute({ body: second, decide, now: 901 })]);
+  assert.deepEqual(await Promise.all(routed.map((response) => response.text())), ["coder", "coder"]);
+  assert.equal(decisions, 1);
+});
