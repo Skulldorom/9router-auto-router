@@ -219,6 +219,21 @@ test("card strategy persistence keeps dormant Auto Router configuration", () => 
     assert.match(source, /onSetStrategy:[A-Za-z_$][\w$]*=>_arSetStrategy\([A-Za-z_$][\w$]*\.name,[A-Za-z_$][\w$]*\)/);
   }
 });
+
+test("Edit Combo renders both Auto Router methods and reuses the normal model picker for Jev", () => {
+  const dir = fixture(); assert.equal(patch(dir).status, 0);
+  for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) {
+    const modal = modalSection(source);
+    for (const label of ["Routing method", "Local classifier", "Jev", "Jev decision model", "Tier 1 · Cheapest", "Advanced Jev settings", "Jev decision timeout (ms)"]) assert.ok(modal.includes(label));
+    assert.match(modal, /_arJevPicker&&\(0,[A-Za-z_$][\w$]*\.jsx\)\([A-Za-z_$][\w$]*,\{isOpen:_arJevPicker/);
+    assert.match(modal, /activeProviders:[A-Za-z_$][\w$]*/);
+    assert.match(modal, /onSelect:model=>\{let value=typeof model==="string"\?model:model\?\.value\|\|model\?\.id\|\|""/);
+    assert.doesNotMatch(modal, /type:"text"[^}]*Jev decision model/);
+    assert.match(modal, /"jev"===_arConfig\.method\?\(0===index\?"Tier 1 · Cheapest"/);
+    assert.match(modal, /0===index\?"Easy":1===index\?"Hard":"Ignored"/);
+    assert.match(source, /next\.autoRouter=\{\.\.\.freshConfig,\.\.\.strategy\.autoRouter\}/);
+  }
+});
 test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v9/); assert.equal(source.split("9router-auto-router-ui:v9").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });
 
 // --- patcher robustness --------------------------------------------------------------------
@@ -243,6 +258,7 @@ test("patcher fails closed when the strategy selector is missing", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /strategy selector/);
 });
+
 
 test("patcher fails closed when the Save path is incompatible", () => {
   const server = serverUi.replace("onSave:a=>y(g.id,a)", "onSave:a=>a");

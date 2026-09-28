@@ -374,7 +374,7 @@ function jevRequest(body, candidates) {
   const summary = [
     "Select the lowest numbered candidate that can reliably complete the request. Return only its integer index.",
     ...candidates.map((candidate, index) => `Candidate ${index + 1}: ${candidate} (tier ${index + 1}${index === 0 ? ", lowest cost/capability" : index === candidates.length - 1 ? ", highest cost/capability" : ""})`),
-    `Request metadata: messages=${state.messageCount}; chars=${state.chars}; tool_calls=${state.toolCalls}; tool_results=${state.toolResults}; tool_result_chars=${state.toolResultChars}; modalities=${state.modalities}.`,
+    `Request metadata: messages=${state.messageCount}; chars=${state.chars}; system_messages=${state.systemMessages}; system_chars=${state.systemChars}; tool_calls=${state.toolCalls}; tool_results=${state.toolResults}; tool_result_chars=${state.toolResultChars}; modalities=${state.modalities}.`,
     previous.length ? `Relevant previous user context:\n${previous.join("\n")}` : "",
     `Current user request:\n${latest || "(no extractable user text)"}`,
   ].filter(Boolean).join("\n\n");

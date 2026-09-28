@@ -588,8 +588,28 @@ test("Jev validates candidate pools and sanitizes bounded decision requests", ()
   const request = router.jevRequest({ messages: [{ role: "system", content: "secret-system" }, { role: "user", content: "x".repeat(6000) }], tools: [{ function: { name: "secret-tool", description: "x".repeat(50000) } }] }, ["cheap", "strong"]);
   const content = request.messages[1].content;
   assert.ok(content.includes("Candidate 1: cheap"));
+  assert.match(content, /system_messages=1; system_chars=13/);
   assert.ok(content.length < 5500);
   assert.ok(!content.includes("secret-system") && !content.includes("secret-tool"));
+});
+
+test("Jev sanitizes a large OpenHands envelope and fallback preserves local meaningful-context routing", async () => {
+  const body = harness("test"), requests = [], delegated = [];
+  const response = await router.routeAutoCombo({
+    body, comboName: "auto", models: ["easy", "hard"],
+    comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } },
+    log: { info() {}, warn() {} },
+    decide: async (request) => { requests.push(request); throw new Error("unavailable"); },
+    delegate: (sent, target) => { delegated.push({ sent, target }); return new Response("ok"); },
+  });
+  const content = requests[0].messages[1].content;
+  assert.equal(await response.text(), "ok");
+  assert.deepEqual(delegated.map(({ target }) => target), ["easy"]);
+  assert.equal(delegated[0].sent, body);
+  assert.match(content, /messages=1; chars=4; system_messages=2; system_chars=/);
+  assert.match(content, /tool_calls=0; tool_results=0/);
+  assert.ok(content.length < 5500);
+  assert.ok(!content.includes("You are a software engineering agent") && !content.includes("openhands_tool_0"));
 });
 
 test("Jev rejects self-referencing and Auto Router candidates", async () => {
