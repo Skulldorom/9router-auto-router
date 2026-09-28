@@ -431,6 +431,13 @@ async function selectJevRoute({ body, comboName, comboStrategies, globalStrategy
   const index = candidateIndex(await responseJson(response), candidates);
   return { target: candidates[index], index, candidates, config };
 }
+function selectJevFallbackRoute(body, comboName, { comboStrategies = {}, globalStrategy = "fallback", models } = {}) {
+  const persisted = comboStrategies?.[comboName]?.autoRouter;
+  const config = getConfig(process.env, persisted), candidates = jevCandidates(models), classification = classifyTaskComplexity(body, config);
+  for (const candidate of candidates) validateAutoTarget(comboName, candidate, comboStrategies, globalStrategy, null, "Jev candidate");
+  const index = classification.level === "easy" ? 0 : candidates.length - 1, target = candidates[index];
+  return { target, index, candidates, classification, config };
+}
 function errorResponse(message) { return new Response(JSON.stringify({ error: { message: `AUTO-ROUTER: ${message}` } }), { status: 400, headers: { "Content-Type": "application/json" } }); }
 async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy, log, delegate, targetExists, models, decide }) {
   const active = body && typeof body === "object" ? activeAutoCombos.get(body) : null;
@@ -450,7 +457,7 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
       try { route = await selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide }); source = "jev"; }
       catch (error) {
         failure = failureReason(error);
-        try { route = selectRoute(body, comboName, { comboStrategies, globalStrategy, models }); }
+        try { route = selectJevFallbackRoute(body, comboName, { comboStrategies, globalStrategy, models }); }
         catch (fallbackError) { log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${fallbackError.message}`); return errorResponse(fallbackError.message); }
         source = "local-fallback";
       }

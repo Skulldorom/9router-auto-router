@@ -637,6 +637,7 @@ test("Jev sanitizes a large OpenHands envelope and fallback preserves local mean
     delegate: (sent, target) => { delegated.push({ sent, target }); return new Response("ok"); },
   });
   const { state } = requests[0];
+
   assert.equal(await response.text(), "ok");
   assert.deepEqual(delegated.map(({ target }) => target), ["easy"]);
   assert.equal(delegated[0].sent, body);
@@ -644,6 +645,21 @@ test("Jev sanitizes a large OpenHands envelope and fallback preserves local mean
   assert.match(state, /tool_calls=0; tool_results=0/);
   assert.ok(state.length < 5500);
   assert.ok(!state.includes("You are a software engineering agent") && !state.includes("openhands_tool_0"));
+});
+
+test("Jev failure maps hard local classification to the strongest candidate", async () => {
+  const calls = [], logs = [];
+  const response = await routeAutoCombo({
+    body: { messages: [{ role: "user", content: "Design a distributed migration with backwards-compatible rollback and concurrency safeguards." }] },
+    comboName: "auto", comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "system-one" } } } },
+    models: ["cheap", "standard", "premium"],
+    log: { info: (...args) => logs.push(args.join(" ")), warn() {} },
+    decide: async () => { throw new Error("provider unavailable"); },
+    delegate: async (_body, target) => { calls.push(target); return "delegated"; },
+  });
+  assert.equal(response, "delegated");
+  assert.deepEqual(calls, ["premium"]);
+  assert.match(logs.at(-1), /method=jev selected=premium source=local-fallback reason=decision-error/);
 });
 
 test("Jev rejects self-referencing and Auto Router candidates", async () => {

@@ -9,6 +9,8 @@ const appRoot = process.argv[2] || "/app";
 const checkOnly = process.argv.includes("--check");
 const runtimeMarker = "9router-auto-router:v3";
 const uiMarker = "9router-auto-router-ui:v9";
+const pickerMarker = "9router-auto-router-systemone-picker:v1";
+const typedKindsPattern = /new Set\(\["image","tts","stt","embedding","imageToText"\]\)/;
 const numericBounds = Object.freeze(Object.fromEntries(Object.entries(NUMERIC_BOUNDS).map(([key, { min, max }]) => [key, Object.freeze([min, max])])));
 
 function count(source, needle) { return source.split(needle).length - 1; }
@@ -202,6 +204,34 @@ function discoverUiCandidates() {
   if (candidates.length !== 2) fail(`Combo UI strategy asset candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  Group models under one name`);
   return candidates;
 }
+function discoverPickerCandidates() {
+  const files = walk(path.join(appRoot, ".next")).filter((file) => file.endsWith(".js"));
+  const candidates = files.filter((file) => {
+    const source = fs.readFileSync(file, "utf8");
+    return (typedKindsPattern.test(source) || source.includes(pickerMarker)) && source.includes("kindFilter");
+  });
+  if (candidates.length !== 2) fail(`Model picker candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  kindFilter and the typed model-kind set`);
+  return candidates;
+}
+function patchPicker(targets) {
+  let changed = false;
+  for (const target of targets) {
+    const source = fs.readFileSync(target, "utf8");
+    if (source.includes(pickerMarker)) {
+      if (count(source, pickerMarker) !== 1 || !source.includes('"imageToText","systemone"')) fail(`Patched System One picker integrity failed:\n  ${path.relative(appRoot, target)}`);
+      continue;
+    }
+    const matches = [...source.matchAll(new RegExp(typedKindsPattern.source, "g"))];
+    if (matches.length !== 1) fail(`Model picker typed-kind filtering is ambiguous:\n  ${path.relative(appRoot, target)}\n\nExpected exactly one typed model-kind set; found ${matches.length}.`);
+    const match = matches[0];
+    const patched = `${source.slice(0, match.index)}new Set(["image","tts","stt","embedding","imageToText","systemone"])/* ${pickerMarker} */${source.slice(match.index + match[0].length)}`;
+    if (count(patched, pickerMarker) !== 1 || !patched.includes('"imageToText","systemone"')) fail(`System One picker patch integrity failed:\n  ${path.relative(appRoot, target)}`);
+    fs.writeFileSync(target, patched);
+    changed = true;
+  }
+  return changed;
+}
+
 // The derived image does not ship a top-level acorn install; upstream bundles one under
 // Next.js. Resolve a parser from the project first (npm ci) and fall back to the upstream
 // copy so `RUN node apply-patch.mjs /app` keeps working without enlarging the build context.
@@ -298,7 +328,7 @@ function controls(jsx, models, picker, providers) {
   const modelRows = `${models}.map((model,index)=>(0,${jsx}.jsxs)("div",{className:"flex items-center gap-2 rounded border border-black/5 px-2 py-1 dark:border-white/10",children:[(0,${jsx}.jsx)("span",{className:"w-4 text-text-muted",children:index+1}),(0,${jsx}.jsx)("span",{className:"min-w-0 flex-1 truncate",children:model}),(0,${jsx}.jsx)("span",{className:"rounded bg-black/5 px-1.5 py-0.5 font-medium dark:bg-white/10",children:"jev"===_arConfig.method?(0===index?"Tier 1 · Cheapest":index===${models}.length-1?"Tier "+(index+1)+" · Strongest":"Tier "+(index+1)):0===index?"Easy":1===index?"Hard":"Ignored"})]},index))`;
   const localAdvanced = `(0,${jsx}.jsxs)("details",{className:"rounded border border-black/5 p-2 dark:border-white/10",children:[(0,${jsx}.jsx)("summary",{className:"cursor-pointer font-medium",children:"Advanced classifier settings"}),(0,${jsx}.jsxs)("div",{className:"mt-2 grid gap-2",children:[${input("Hard threshold", "_arHard", "_arSetHard", "hardThreshold", DEFAULTS.hardThreshold)},${input("Long context threshold (characters)", "_arContext", "_arSetContext", "longContextChars", DEFAULTS.longContextChars)},${input("Large tool-result threshold (characters)", "_arToolResult", "_arSetToolResult", "largeToolResultChars", DEFAULTS.largeToolResultChars)},${input("Many-tools threshold", "_arTools", "_arSetTools", "manyTools", DEFAULTS.manyTools)},(0,${jsx}.jsxs)("label",{className:"flex items-center gap-2",children:[(0,${jsx}.jsx)("input",{type:"checkbox",checked:!!_arConfig.verbose,onChange:event=>_arUpdate("verbose",event.target.checked)}),"Verbose logging"]})]})]})`;
   const jevAdvanced = `(0,${jsx}.jsxs)("details",{className:"rounded border border-black/5 p-2 dark:border-white/10",children:[(0,${jsx}.jsx)("summary",{className:"cursor-pointer font-medium",children:"Advanced Jev settings"}),(0,${jsx}.jsx)("div",{className:"mt-2 grid gap-2",children:${input("Jev decision timeout (ms)", "_arJevTimeout", "_arSetJevTimeout", "jevTimeoutMs", DEFAULTS.jevTimeoutMs)}})]})`;
-  const jev = `(0,${jsx}.jsxs)(${jsx}.Fragment,{children:[(0,${jsx}.jsxs)("div",{className:"grid gap-1",children:[(0,${jsx}.jsx)("span",{children:"Jev decision model"}),(0,${jsx}.jsx)("button",{type:"button",className:"rounded border px-2 py-1 text-left",onClick:()=>_arSetJevPicker(!0),children:_arConfig.jev.decisionModel||"Select a configured model"})]}),_arJevPicker&&(0,${jsx}.jsx)(${picker},{isOpen:_arJevPicker,onClose:()=>_arSetJevPicker(!1),activeProviders:${providers},onSelect:model=>{let value=typeof model==="string"?model:model?.value||model?.id||"";value&&_arUpdate("jev",{..._arConfig.jev,decisionModel:value}),_arSetJevPicker(!1)}}),${jevAdvanced}]})`;
+  const jev = `(0,${jsx}.jsxs)(${jsx}.Fragment,{children:[(0,${jsx}.jsxs)("div",{className:"grid gap-1",children:[(0,${jsx}.jsx)("span",{children:"Jev decision model"}),(0,${jsx}.jsx)("button",{type:"button",className:"rounded border px-2 py-1 text-left",onClick:()=>_arSetJevPicker(!0),children:_arConfig.jev.decisionModel||"Select a configured System One model"})]}),_arJevPicker&&(0,${jsx}.jsx)(${picker},{isOpen:_arJevPicker,onClose:()=>_arSetJevPicker(!1),activeProviders:${providers},kindFilter:"systemone",onSelect:model=>{let value=typeof model==="string"?model:model?.value||model?.id||"";value&&_arUpdate("jev",{..._arConfig.jev,decisionModel:value}),_arSetJevPicker(!1)}}),${jevAdvanced}]})`;
   return `"auto"===_arInitialStrategy.fallbackStrategy&&(0,${jsx}.jsxs)("section",{className:"grid gap-2 text-xs",children:[(0,${jsx}.jsx)("p",{className:"font-medium text-text-main",children:"Auto Router"}),${method},"jev"===_arConfig.method?${jev}:(0,${jsx}.jsx)("p",{className:"text-text-muted",children:"Requests are routed between the first two models."}),0===${models}.length?(0,${jsx}.jsx)("p",{className:"rounded border border-amber-500/30 bg-amber-500/10 p-2 text-text-main",children:"Add at least two distinct models."}):(0,${jsx}.jsx)("div",{className:"grid gap-1",children:${modelRows}}),(0,${jsx}.jsx)("p",{className:"text-text-muted",children:"jev"===_arConfig.method?"Models are ordered from cheapest/lower capability to strongest/more expensive. Jev chooses the cheapest model capable of the request.":"1 = Easy · 2 = Hard · Models after position 2 are ignored by Auto Router."}),_arLegacyMigration&&(0,${jsx}.jsx)("p",{className:"text-text-muted",children:"Legacy targets remain effective until this model order is saved."}),"local"===_arConfig.method&&${localAdvanced}]})`;
 }
 function isSettingsStrategyWriter(node) {
@@ -444,6 +474,7 @@ function patchUi(targets) {
 
 const runtime = discoverRuntimeCandidate();
 const ui = discoverUiCandidates();
+const picker = discoverPickerCandidates();
 if (checkOnly) {
   const runtimeSource = fs.readFileSync(runtime, "utf8");
   if (runtimeSource.includes(runtimeMarker)) verifyPatchedRuntime(runtime, runtimeSource);
@@ -453,9 +484,14 @@ if (checkOnly) {
     if (source.includes(uiMarker)) verifyPatchedUi(target, source);
     else discoverUiStructure(source, target);
   }
-  console.log(`9Router Auto Router compatibility check passed: runtime=${path.relative(appRoot, runtime)} ui=${ui.map((file) => path.relative(appRoot, file)).join(",")}`);
+  for (const target of picker) {
+    const source = fs.readFileSync(target, "utf8");
+    if (source.includes(pickerMarker) && (count(source, pickerMarker) !== 1 || !source.includes('"imageToText","systemone"'))) fail(`Patched System One picker integrity failed:\n  ${path.relative(appRoot, target)}`);
+  }
+  console.log(`9Router Auto Router compatibility check passed: runtime=${path.relative(appRoot, runtime)} ui=${ui.map((file) => path.relative(appRoot, file)).join(",")} picker=${picker.map((file) => path.relative(appRoot, file)).join(",")}`);
 } else {
   const runtimeChanged = patchRuntime(runtime);
   const uiChanged = patchUi(ui);
-  console.log(`9Router Auto Router patch ${runtimeChanged || uiChanged ? "applied" : "already applied"}: runtime=${path.relative(appRoot, runtime)} ui=${ui.map((file) => path.relative(appRoot, file)).join(",")}`);
+  const pickerChanged = patchPicker(picker);
+  console.log(`9Router Auto Router patch ${runtimeChanged || uiChanged || pickerChanged ? "applied" : "already applied"}: runtime=${path.relative(appRoot, runtime)} ui=${ui.map((file) => path.relative(appRoot, file)).join(",")} picker=${picker.map((file) => path.relative(appRoot, file)).join(",")}`);
 }
