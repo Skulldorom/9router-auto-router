@@ -155,7 +155,7 @@ test("published GHCR image receives SHA-pinned provenance with least required pe
   assert.match(publish, /attestations: write/);
   assert.match(publish, /id-token: write/);
   assert.match(publish, /packages: write/);
-  assert.match(publish, /actions\/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2\.4\.0/);
+  assert.match(publish, /actions\/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4\.2\.2/);
   assert.match(publish, /subject-name: \$\{\{ steps\.publish\.outputs\.image \}\}/);
   assert.match(publish, /subject-digest: \$\{\{ steps\.publish\.outputs\.digest \}\}/);
   assert.match(publish, /push-to-registry: true/);

@@ -58,6 +58,7 @@ const jevStickyRoutes = new Map();
 const jevStickyPending = new Map();
 const JEV_STICKY_TTL_MS = 30 * 60 * 1000;
 const JEV_STICKY_MAX_ENTRIES = 2048;
+let jevStickyMaxEntries = JEV_STICKY_MAX_ENTRIES;
 const TEXT_FIELDS = new Set(["text", "content", "input_text", "output_text", "arguments", "output"]);
 const USER_TEXT_FIELDS = new Set(["text", "content", "input_text"]);
 const PART_FIELDS = new Set(["content", "parts", "input"]);
@@ -88,7 +89,6 @@ function getConfig(env = process.env, explicit = {}) {
     hardThreshold: configuredPositiveInt(selected, "hardThreshold", env.AUTO_ROUTER_HARD_THRESHOLD, DEFAULTS.hardThreshold),
     longContextChars: configuredPositiveInt(selected, "longContextChars", env.AUTO_ROUTER_LONG_CONTEXT_CHARS, DEFAULTS.longContextChars),
     largeToolResultChars: configuredPositiveInt(selected, "largeToolResultChars", env.AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS, DEFAULTS.largeToolResultChars),
-    manyTools: configuredPositiveInt(selected, "manyTools", env.AUTO_ROUTER_MANY_TOOLS, DEFAULTS.manyTools),
     verbose: configuredBoolean(selected, "verbose", env.AUTO_ROUTER_VERBOSE, DEFAULTS.verbose),
     method: selected.method === "jev" ? "jev" : "local",
     jev: {
@@ -417,10 +417,19 @@ function candidateIndex(response, candidates, startIndex = 0) {
   if (!Number.isSafeInteger(index) || index < startIndex || index >= startIndex + candidates.length) throw new Error("invalid-candidate");
   return index - startIndex;
 }
-function deadline(promise, timeoutMs, timers = globalThis) {
+function deadline(start, timeoutMs, timers = globalThis) {
+  const controller = new globalThis.AbortController();
   let timeout;
-  const expired = new Promise((_, reject) => { timeout = timers.setTimeout(() => reject(new Error("timeout")), timeoutMs); });
-  return Promise.race([Promise.resolve(promise), expired]).finally(() => timers.clearTimeout(timeout));
+  const expired = new Promise((_, reject) => {
+    timeout = timers.setTimeout(() => {
+      reject(new Error("timeout"));
+      controller.abort();
+    }, timeoutMs);
+  });
+  let pending;
+  try { pending = Promise.resolve(start(controller.signal)); }
+  catch (error) { pending = Promise.reject(error); }
+  return Promise.race([pending, expired]).finally(() => timers.clearTimeout(timeout));
 }
 function failureReason(error) {
   const message = error instanceof Error ? error.message : String(error);
@@ -440,7 +449,7 @@ async function selectJevRoute({ body, comboName, comboStrategies, globalStrategy
   if (!allowed.length) throw new Error("invalid-candidate");
   const request = jevRequest(body, allowed, startIndex);
   request.model = config.jev.decisionModel;
-  const response = await deadline(decide(request, config.jev.decisionModel), config.jev.timeoutMs);
+  const response = await deadline((signal) => decide(request, config.jev.decisionModel, signal), config.jev.timeoutMs);
   const index = startIndex + candidateIndex(await responseJson(response), allowed, startIndex);
   return { target: candidates[index], index, candidates, config };
 }
@@ -497,7 +506,7 @@ function stickyKey(comboName, body, clientIdentity, headers) {
 function candidateSignature(candidates) { return JSON.stringify(candidates); }
 function cleanupStickyRoutes(now) {
   for (const [key, entry] of jevStickyRoutes) if (entry.expiresAt <= now) jevStickyRoutes.delete(key);
-  while (jevStickyRoutes.size > JEV_STICKY_MAX_ENTRIES) jevStickyRoutes.delete(jevStickyRoutes.keys().next().value);
+  while (jevStickyRoutes.size > jevStickyMaxEntries) jevStickyRoutes.delete(jevStickyRoutes.keys().next().value);
 }
 function readStickyRoute(key, candidates, now) {
   if (!key) return null;
@@ -509,6 +518,8 @@ function readStickyRoute(key, candidates, now) {
   }
   entry.expiresAt = now + JEV_STICKY_TTL_MS;
   entry.escalationScore = Number.isFinite(entry.escalationScore) ? entry.escalationScore : 0;
+  jevStickyRoutes.delete(key);
+  jevStickyRoutes.set(key, entry);
   return entry;
 }
 function writeStickyRoute(key, route, now, pending) {
@@ -615,4 +626,10 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   }
 }
 
-module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget, effectiveTargets, jevCandidates, jevRequest, candidateIndex, deadline, stableConversationId, resolveConversationIdentity, stickyKey };
+function resetJevStickyStateForTests(maxEntries = JEV_STICKY_MAX_ENTRIES) {
+  jevStickyRoutes.clear();
+  jevStickyPending.clear();
+  jevStickyMaxEntries = maxEntries;
+}
+
+module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget, effectiveTargets, jevCandidates, jevRequest, candidateIndex, deadline, stableConversationId, resolveConversationIdentity, stickyKey, resetJevStickyStateForTests };

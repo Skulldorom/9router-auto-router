@@ -66,4 +66,4 @@ assert_settings
 docker rm -f "$NAME" >/dev/null
 start
 assert_settings
-echo "Settings persistence test passed: API save/reload survives a container restart using the same /app/data."
+echo "Settings persistence test passed: legacy Auto Router fields load and survive API save/reload across a container restart."

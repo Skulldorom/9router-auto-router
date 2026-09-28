@@ -106,7 +106,7 @@ const phase = process.env.PHASE;
     };
     const assertDormant = async strategyName => {
       const { settings, combo } = await settingsAndCombo(), config = settings.comboStrategies?.["coder-auto"]?.autoRouter;
-      if (settings.comboStrategies?.["coder-auto"]?.fallbackStrategy !== strategyName || config?.easyTarget !== "coder" || config?.hardTarget !== "coder-high" || config?.hardThreshold !== 7 || config?.longContextChars !== 24000 || config?.largeToolResultChars !== 12000 || config?.manyTools !== 16 || config?.verbose !== true || JSON.stringify(combo?.models) !== JSON.stringify(["coder-high", "coder", "coder-auto-model"])) throw new Error(`${phase} ${strategyName} did not preserve dormant legacy Auto Router settings or stored model order`);
+      if (settings.comboStrategies?.["coder-auto"]?.fallbackStrategy !== strategyName || config?.easyTarget !== "coder" || config?.hardTarget !== "coder-high" || config?.hardThreshold !== 7 || config?.longContextChars !== 24000 || config?.largeToolResultChars !== 12000 || config?.verbose !== true || JSON.stringify(combo?.models) !== JSON.stringify(["coder-high", "coder", "coder-auto-model"])) throw new Error(`${phase} ${strategyName} did not preserve dormant legacy Auto Router settings or stored model order`);
     };
     const comboResponse = await page.request.get(`${process.env.BASE_URL}/api/combos`);
     const autoCombo = (await comboResponse.json()).combos.find(combo => combo.name === "coder-auto");
@@ -189,7 +189,7 @@ const phase = process.env.PHASE;
       if (!settingsResponse.ok || !combosResponse.ok) return false;
       const settings = await settingsResponse.json(), combo = (await combosResponse.json()).combos.find(entry => entry.name === "coder-auto");
       const config = settings.comboStrategies?.["coder-auto"]?.autoRouter;
-      return settings.comboStrategies?.["coder-auto"]?.fallbackStrategy === "auto" && config?.hardThreshold === 7 && config?.longContextChars === 24000 && config?.largeToolResultChars === 12000 && config?.manyTools === 16 && config?.verbose === true && !("easyTarget" in config) && !("hardTarget" in config) && JSON.stringify(combo?.models) === JSON.stringify(["coder", "coder-high", "coder-auto-model"]);
+      return settings.comboStrategies?.["coder-auto"]?.fallbackStrategy === "auto" && config?.hardThreshold === 7 && config?.longContextChars === 24000 && config?.largeToolResultChars === 12000 && !Object.hasOwn(config, "manyTools") && config?.verbose === true && !("easyTarget" in config) && !("hardTarget" in config) && JSON.stringify(combo?.models) === JSON.stringify(["coder", "coder-high", "coder-auto-model"]);
     }, { timeout: 10_000 });
     await page.reload({ waitUntil: "networkidle" });
     await autoCard().locator("button[title=\"Edit\"]").click();

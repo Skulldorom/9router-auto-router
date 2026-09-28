@@ -408,7 +408,8 @@ test("invalid explicit numeric values fall back to valid legacy values", () => {
 
 test("invalid per-combo fields independently fall back to valid legacy values", () => {
   const config = router.getConfig({ AUTO_ROUTER_EASY_TARGET: "env-easy", AUTO_ROUTER_HARD_TARGET: "env-hard", AUTO_ROUTER_HARD_THRESHOLD: "8", AUTO_ROUTER_LONG_CONTEXT_CHARS: "28000", AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS: "14000", AUTO_ROUTER_MANY_TOOLS: "18", AUTO_ROUTER_VERBOSE: "true" }, { easyTarget: " ", hardTarget: null, hardThreshold: -1, longContextChars: "bad", largeToolResultChars: 0, manyTools: 1.5, verbose: "invalid" });
-  assert.deepEqual(config, { easyTarget: "env-easy", hardTarget: "env-hard", hardThreshold: 8, longContextChars: 28000, largeToolResultChars: 14000, manyTools: 18, verbose: true, method: "local", jev: { decisionModel: null, timeoutMs: router.DEFAULTS.jevTimeoutMs } });
+  assert.deepEqual(config, { easyTarget: "env-easy", hardTarget: "env-hard", hardThreshold: 8, longContextChars: 28000, largeToolResultChars: 14000, verbose: true, method: "local", jev: { decisionModel: null, timeoutMs: router.DEFAULTS.jevTimeoutMs } });
+  assert.ok(!Object.hasOwn(config, "manyTools"));
 });
 
 test("invalid UI and legacy values use defaults while boolean parsing is deliberate", () => {
@@ -591,24 +592,40 @@ test("Jev failures safely fall back to the unchanged local classifier", async ()
   }
 });
 
-test("Jev timeout clears its timer while the uncancellable dispatcher settles independently", async () => {
+test("Jev timeout aborts the local decision and releases pending selection state", async () => {
   const timers = { scheduled: [], cleared: [], setTimeout(callback) { this.scheduled.push(callback); return this.scheduled.length; }, clearTimeout(id) { this.cleared.push(id); } };
-  assert.equal(await router.deadline(Promise.resolve("1"), 100, timers), "1");
+  let completedSignal;
+  assert.equal(await router.deadline((signal) => { completedSignal = signal; return "1"; }, 100, timers), "1");
+  assert.equal(completedSignal.aborted, false);
   assert.deepEqual(timers.cleared, [1]);
-  const never = router.deadline(new Promise(() => {}), 100, timers);
+  let timedOutSignal;
+  const never = router.deadline((signal) => new Promise((_, reject) => { timedOutSignal = signal; signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true }); }), 100, timers);
+  await Promise.resolve();
   timers.scheduled[1]();
   await assert.rejects(never, /timeout/);
+  assert.equal(timedOutSignal.aborted, true);
   assert.deepEqual(timers.cleared, [1, 2]);
-  let release;
-  const pending = new Promise((resolve) => { release = resolve; });
-  const fallback = router.routeAutoCombo({
-    body: message("hello"), comboName: "auto", models: ["easy", "hard"],
+
+  let aborted = false, calls = 0;
+  const timedOut = router.routeAutoCombo({
+    body: stickyBody("hello", "timeout-releases-pending"), comboName: "auto", models: ["easy", "hard"], clientIdentity: "Bearer timeout-client",
     comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge", timeoutMs: 100 } } } },
-    log: { info() {}, warn() {} }, decide: () => pending, delegate: (_body, target) => new Response(target),
+    log: { info() {}, warn() {} },
+    decide: (_request, _model, signal) => new Promise((_, reject) => signal.addEventListener("abort", () => { aborted = true; reject(Object.assign(new Error("aborted"), { name: "AbortError" })); }, { once: true })),
+    delegate: (_body, target) => new Response(target),
   });
   await new Promise((resolve) => setTimeout(resolve, 110));
-  assert.equal(await (await fallback).text(), "easy");
-  release("1");
+  assert.equal(await (await timedOut).text(), "easy");
+  assert.equal(aborted, true);
+  const later = await router.routeAutoCombo({
+    body: stickyBody("hello", "timeout-releases-pending"), comboName: "auto", models: ["new-easy", "new-hard"], clientIdentity: "Bearer timeout-client",
+    comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } },
+    log: { info() {}, warn() {} },
+    decide: async () => ({ answers: { candidate: { type: "choice", choice: ++calls === 1 ? "candidate_2" : "candidate_1" } } }),
+    delegate: (_body, target) => new Response(target),
+  });
+  assert.equal(await later.text(), "new-hard");
+  assert.equal(calls, 1);
 });
 
 test("Jev validates candidate pools and sanitizes bounded native System One requests", () => {
@@ -803,6 +820,25 @@ test("Jev sticky entries expire and invalidate on candidate configuration change
   const reordered = await stickyRoute({ body: stickyBody("Rename one label.", "mutation"), decide, models: ["coder", "cheap", "coder-high", "premium"], now: 701 });
   assert.equal(await reordered.text(), "coder");
   assert.equal(calls, 4);
+});
+
+test("Jev sticky cache refreshes LRU recency on valid reuse", async () => {
+  router.resetJevStickyStateForTests(2);
+  try {
+    const choices = ["candidate_1", "candidate_2", "candidate_3", "candidate_1"];
+    let decisions = 0;
+    const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: choices.shift() } } }; };
+    const route = (conversation, now) => stickyRoute({ body: stickyBody("Rename one label.", conversation), decide, now });
+    assert.equal(await (await route("lru-a", 1)).text(), "cheap");
+    assert.equal(await (await route("lru-b", 2)).text(), "coder");
+    assert.equal(await (await route("lru-a", 3)).text(), "cheap");
+    assert.equal(await (await route("lru-c", 4)).text(), "coder-high");
+    assert.equal(await (await route("lru-a", 5)).text(), "cheap");
+    assert.equal(await (await route("lru-b", 6)).text(), "cheap");
+    assert.equal(decisions, 4);
+  } finally {
+    router.resetJevStickyStateForTests();
+  }
 });
 
 test("Jev pending initial decisions do not cross candidate configuration changes", async () => {
