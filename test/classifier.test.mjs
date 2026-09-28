@@ -87,9 +87,10 @@ test("nested request wrappers use their canonical tool or function collection", 
 });
 
 test("numeric configuration accepts documented boundaries and rejects adjacent values", () => {
-  const fields = Object.entries(router.NUMERIC_BOUNDS);
+  const fields = Object.entries(router.NUMERIC_BOUNDS).filter(([key]) => key !== "jevTimeoutMs");
   const explicit = Object.fromEntries(fields.map(([key, bounds]) => [key, bounds.max]));
-  assert.deepEqual(router.getConfig({}, explicit), { ...router.DEFAULTS, ...explicit });
+  assert.deepEqual(router.getConfig({}, explicit), { ...Object.fromEntries(Object.entries(router.DEFAULTS).filter(([key]) => key !== "jevTimeoutMs")), ...explicit, method: "local", jev: { decisionModel: null, timeoutMs: router.DEFAULTS.jevTimeoutMs } });
+  assert.equal(router.getConfig({}, { jev: { timeoutMs: router.NUMERIC_BOUNDS.jevTimeoutMs.max } }).jev.timeoutMs, router.NUMERIC_BOUNDS.jevTimeoutMs.max);
 
   for (const [key, { min, max }] of fields) {
     const environment = { [`AUTO_ROUTER_${key.replace(/[A-Z]/g, (letter) => `_${letter}`).toUpperCase()}`]: String(max) };
@@ -407,7 +408,7 @@ test("invalid explicit numeric values fall back to valid legacy values", () => {
 
 test("invalid per-combo fields independently fall back to valid legacy values", () => {
   const config = router.getConfig({ AUTO_ROUTER_EASY_TARGET: "env-easy", AUTO_ROUTER_HARD_TARGET: "env-hard", AUTO_ROUTER_HARD_THRESHOLD: "8", AUTO_ROUTER_LONG_CONTEXT_CHARS: "28000", AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS: "14000", AUTO_ROUTER_MANY_TOOLS: "18", AUTO_ROUTER_VERBOSE: "true" }, { easyTarget: " ", hardTarget: null, hardThreshold: -1, longContextChars: "bad", largeToolResultChars: 0, manyTools: 1.5, verbose: "invalid" });
-  assert.deepEqual(config, { easyTarget: "env-easy", hardTarget: "env-hard", hardThreshold: 8, longContextChars: 28000, largeToolResultChars: 14000, manyTools: 18, verbose: true });
+  assert.deepEqual(config, { easyTarget: "env-easy", hardTarget: "env-hard", hardThreshold: 8, longContextChars: 28000, largeToolResultChars: 14000, manyTools: 18, verbose: true, method: "local", jev: { decisionModel: null, timeoutMs: router.DEFAULTS.jevTimeoutMs } });
 });
 
 test("invalid UI and legacy values use defaults while boolean parsing is deliberate", () => {
@@ -549,3 +550,52 @@ test("legacy target configuration remains effective until UI normalization", () 
   assert.equal(normalized.target, "legacy-hard"); assert.equal(normalized.config.easyTarget, "legacy-easy");
 });
 test("missing ordered models return a controlled runtime configuration error", async () => { const response = await router.routeAutoCombo({ body: message("hello"), comboName: "auto", comboStrategies: {}, models: ["only"], log: { info() {}, warn() {} }, delegate: () => new Response("unexpected") }); assert.equal(response.status, 400); assert.match((await response.json()).error.message, /requires two distinct usable models/); });
+
+test("Jev selects validated ordered candidates and delegates through the normal target path", async () => {
+  const delegated = [];
+  const log = { info() {}, warn() {} };
+  for (const [selection, expected] of [["1", "cheap"], ["2", "coder"], ["4", "premium"]]) {
+    const response = await router.routeAutoCombo({
+      body: message("Implement the request"), comboName: "auto", models: ["cheap", "coder", "strong", "premium"],
+      comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } }, log,
+      decide: async () => ({ choices: [{ message: { content: selection } }] }),
+      delegate: (body, target) => { delegated.push({ body, target }); return new Response(target); },
+    });
+    assert.equal(await response.text(), expected);
+  }
+  assert.deepEqual(delegated.map(({ target }) => target), ["cheap", "coder", "premium"]);
+  assert.ok(delegated.every(({ body }) => body.messages[0].content === "Implement the request"));
+});
+
+test("Jev failures safely fall back to the unchanged local classifier", async () => {
+  const failures = [undefined, async () => { throw new Error("provider down"); }, async () => "bad output", async () => "9", () => new Promise(() => {})];
+  for (const decide of failures) {
+    const delegated = [], logs = [];
+    await router.routeAutoCombo({
+      body: message("Rename one label."), comboName: "auto", models: ["easy", "hard"],
+      comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge", timeoutMs: 100 } } } },
+      log: { info: (...entry) => logs.push(entry), warn() {} }, decide,
+      delegate: (body, target) => { delegated.push(target); return new Response("ok"); },
+    });
+    assert.deepEqual(delegated, ["easy"]);
+    assert.ok(logs.some((entry) => entry.join(" ").includes("source=local-fallback")));
+  }
+});
+
+test("Jev validates candidate pools and sanitizes bounded decision requests", () => {
+  assert.throws(() => router.jevCandidates(["a"]), /at least two/);
+  assert.throws(() => router.jevCandidates(["a", "a"]), /distinct/);
+  const request = router.jevRequest({ messages: [{ role: "system", content: "secret-system" }, { role: "user", content: "x".repeat(6000) }], tools: [{ function: { name: "secret-tool", description: "x".repeat(50000) } }] }, ["cheap", "strong"]);
+  const content = request.messages[1].content;
+  assert.ok(content.includes("Candidate 1: cheap"));
+  assert.ok(content.length < 5500);
+  assert.ok(!content.includes("secret-system") && !content.includes("secret-tool"));
+});
+
+test("Jev rejects self-referencing and Auto Router candidates", async () => {
+  const base = { body: message("hello"), comboName: "auto", log: { info() {}, warn() {} }, decide: async () => "1", delegate: () => new Response("unexpected") };
+  const self = await router.routeAutoCombo({ ...base, models: ["auto", "ordinary"], comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } } });
+  assert.equal(self.status, 400);
+  const chained = await router.routeAutoCombo({ ...base, models: ["next-auto", "ordinary"], comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } }, "next-auto": { fallbackStrategy: "auto" } } });
+  assert.equal(chained.status, 400);
+});
