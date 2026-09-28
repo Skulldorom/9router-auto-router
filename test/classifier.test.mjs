@@ -611,7 +611,7 @@ test("Jev timeout aborts the local decision and releases pending selection state
     body: stickyBody("hello", "timeout-releases-pending"), comboName: "auto", models: ["easy", "hard"], clientIdentity: "Bearer timeout-client",
     comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge", timeoutMs: 100 } } } },
     log: { info() {}, warn() {} },
-    decide: (_request, _model, signal) => new Promise((_, reject) => signal.addEventListener("abort", () => { aborted = true; reject(Object.assign(new Error("aborted"), { name: "AbortError" })); }, { once: true })),
+    decide: (_request, _model, signal) => ({ json: () => new Promise((_, reject) => signal.addEventListener("abort", () => { aborted = true; reject(Object.assign(new Error("aborted"), { name: "AbortError" })); }, { once: true })) }),
     delegate: (_body, target) => new Response(target),
   });
   await new Promise((resolve) => setTimeout(resolve, 110));
@@ -823,22 +823,21 @@ test("Jev sticky entries expire and invalidate on candidate configuration change
 });
 
 test("Jev sticky cache refreshes LRU recency on valid reuse", async () => {
-  router.resetJevStickyStateForTests(2);
-  try {
-    const choices = ["candidate_1", "candidate_2", "candidate_3", "candidate_1"];
-    let decisions = 0;
-    const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: choices.shift() } } }; };
-    const route = (conversation, now) => stickyRoute({ body: stickyBody("Rename one label.", conversation), decide, now });
-    assert.equal(await (await route("lru-a", 1)).text(), "cheap");
-    assert.equal(await (await route("lru-b", 2)).text(), "coder");
-    assert.equal(await (await route("lru-a", 3)).text(), "cheap");
-    assert.equal(await (await route("lru-c", 4)).text(), "coder-high");
-    assert.equal(await (await route("lru-a", 5)).text(), "cheap");
-    assert.equal(await (await route("lru-b", 6)).text(), "cheap");
-    assert.equal(decisions, 4);
-  } finally {
-    router.resetJevStickyStateForTests();
-  }
+  const epoch = 2_000_000;
+  let decisions = 0;
+  const decide = async () => {
+    decisions += 1;
+    return { answers: { candidate: { type: "choice", choice: decisions === 1 ? "candidate_1" : decisions === 2 ? "candidate_2" : decisions === 2049 ? "candidate_3" : decisions === 2050 ? "candidate_4" : "candidate_1" } } };
+  };
+  const route = (conversation, now) => stickyRoute({ body: stickyBody("Rename one label.", conversation), decide, now });
+  assert.equal(await (await route("lru-a", epoch)).text(), "cheap");
+  assert.equal(await (await route("lru-b", epoch + 1)).text(), "coder");
+  assert.equal(await (await route("lru-a", epoch + 2)).text(), "cheap");
+  for (let index = 0; index < 2046; index += 1) await route(`lru-fill-${index}`, epoch + index + 3);
+  assert.equal(await (await route("lru-c", epoch + 2049)).text(), "coder-high");
+  assert.equal(await (await route("lru-a", epoch + 2050)).text(), "cheap");
+  assert.equal(await (await route("lru-b", epoch + 2051)).text(), "premium");
+  assert.equal(decisions, 2050);
 });
 
 test("Jev pending initial decisions do not cross candidate configuration changes", async () => {
@@ -857,6 +856,31 @@ test("Jev pending initial decisions do not cross candidate configuration changes
   const followUp = await stickyRoute({ body: stickyBody("Rename another label.", "pending-initial-mutation"), decide, models: newModels, now: 752 });
   assert.equal(await followUp.text(), "new-coder");
   assert.equal(decisions.length, 2);
+});
+
+test("Jev coalesces concurrent equivalent initial decisions", async () => {
+  const decisions = [];
+  const decide = () => new Promise((resolve) => { decisions.push(resolve); });
+  const first = stickyRoute({ body: stickyBody("Rename one label.", "concurrent-equivalent"), decide, now: 750 });
+  await Promise.resolve();
+  const second = stickyRoute({ body: stickyBody("Rename one label.", "concurrent-equivalent"), decide, now: 751 });
+  await Promise.resolve();
+  assert.equal(decisions.length, 1);
+  decisions[0]({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  assert.deepEqual([await (await first).text(), await (await second).text()], ["coder", "coder"]);
+});
+
+test("Jev only coalesces concurrent decisions with equivalent request context", async () => {
+  const decisions = [];
+  const decide = () => new Promise((resolve) => { decisions.push(resolve); });
+  const easy = stickyRoute({ body: stickyBody("Rename one label.", "concurrent-distinct"), decide, now: 755 });
+  await Promise.resolve();
+  const hard = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "concurrent-distinct"), decide, now: 756 });
+  await Promise.resolve();
+  assert.equal(decisions.length, 2);
+  decisions[0]({ answers: { candidate: { type: "choice", choice: "candidate_1" } } });
+  decisions[1]({ answers: { candidate: { type: "choice", choice: "candidate_4" } } });
+  assert.deepEqual([await (await easy).text(), await (await hard).text()], ["cheap", "premium"]);
 });
 
 test("Jev coalesces concurrent successful upgrades", async () => {
@@ -935,14 +959,14 @@ test("Jev recognizes documented wrapped and Responses conversation identifiers",
   assert.equal(router.stableConversationId(message("no identity")), null);
 });
 
-test("OpenHands-style repeated scaffolding reuses a Jev selection", async () => {
+test("OpenHands-style concurrent requests with distinct context each receive a Jev decision", async () => {
   let decisions = 0;
   const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: "candidate_2" } } }; };
   const first = harness("Rename one label."); first.conversation_id = "openhands-sticky";
   const second = harness("Rename another label."); second.conversation_id = "openhands-sticky";
   const routed = await Promise.all([stickyRoute({ body: first, decide, now: 900 }), stickyRoute({ body: second, decide, now: 901 })]);
   assert.deepEqual(await Promise.all(routed.map((response) => response.text())), ["coder", "coder"]);
-  assert.equal(decisions, 1);
+  assert.equal(decisions, 2);
 });
 
 
