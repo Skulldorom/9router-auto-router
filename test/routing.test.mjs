@@ -24,6 +24,7 @@ const serverUi = [
   'function bJ({combo:a,getCaps:b,activeProviders:c=[],copied:d,onCopy:e,onEdit:f,onDelete:g,strategy:h={},onSetStrategy:i}){let[j,k]=(0,x.useState)(!1),l=h.fallbackStrategy||"fallback",m=h.judgeModel||"";return(0,w.jsxs)(bA.Zp,{padding:"sm",children:[(0,w.jsx)(bA.l6,{options:bI,value:l,onChange:a=>i({fallbackStrategy:a.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===l&&"details",(0,w.jsx)("button",{onClick:()=>f(a),children:"Edit"})]})}',
   'function bN({isOpen:a,combo:b,onClose:c,onSave:d,activeProviders:e,kindFilter:f=null}){let[g,h]=(0,x.useState)(b?.name||""),[i,j]=(0,x.useState)(b?.models||[]),[k,l]=(0,x.useState)(!1),[m,n]=(0,x.useState)(!1),[o,p]=(0,x.useState)(""),[q,r]=(0,x.useState)({}),u=a=>a.trim()?(p(""),!0):(p("Only letters, numbers, -, _ and . allowed"),!1),v=async()=>{u(g)&&(n(!0),await d({name:g.trim(),models:i}),n(!1))},y=!!b;return(0,w.jsxs)(w.Fragment,{children:[(0,w.jsx)(bA.aF,{isOpen:a,onClose:c,title:y?"Edit Combo":"Create Combo",children:(0,w.jsxs)("div",{className:"flex flex-col gap-3",children:[(0,w.jsx)(bA.pd,{label:"Combo Name",value:g,onChange:a=>h(a.target.value)}),(0,w.jsx)("label",{children:"Models"}),(0,w.jsx)("button",{onClick:()=>l(!0),children:"Add Model"}),(0,w.jsxs)("div",{className:"flex flex-col gap-2 pt-1 sm:flex-row",children:[(0,w.jsx)(bA.$n,{onClick:c,children:"Cancel"}),(0,w.jsx)(bA.$n,{onClick:v,children:m?"Saving...":y?"Save":"Create"})]})]})})]})}',
   'function bH(){let[a,b]=(0,x.useState)([]),[c,d]=(0,x.useState)(!1),[e,f]=(0,x.useState)(!1),[g,h]=(0,x.useState)(null),[i,j]=(0,x.useState)([]),[k,l]=(0,x.useState)({});let t=async()=>{let[c,d]=await Promise.all([fetch("/api/combos"),fetch("/api/settings")]),f=await c.json(),h=await d.json();b(f.combos||[]),l(h.comboStrategies||{})},y=async(a,b)=>{try{let c=await fetch(`/api/combos/${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});if(c.ok)await t(),h(null);else{let a=await c.json();alert(a.error||"Failed to update combo")}}catch(a){console.log("Error updating combo:",a)}},A=async(a,b)=>{try{let c={...k},d={...c[a]||{},...b};d.fallbackStrategy&&"fallback"!==d.fallbackStrategy?c[a]=d:delete c[a],await fetch("/api/settings",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({comboStrategies:c})}),l(c)}catch(a){console.log("Error updating combo strategy:",a)}};return(0,w.jsxs)(w.Fragment,{children:[(0,w.jsx)("p",{children:"Group models under one name, then pick a strategy per combo:"}),(0,w.jsxs)("ul",{children:[(0,w.jsxs)("li",{children:[(0,w.jsx)("span",{children:"Fallback"})," — tries models in order (next on failure)"]}),(0,w.jsxs)("li",{children:[(0,w.jsx)("span",{children:"Round Robin"})," — rotates models across requests to spread load"]}),(0,w.jsxs)("li",{children:[(0,w.jsx)("span",{children:"Fusion"})," — queries all models in parallel, then a judge synthesizes one answer"]})]}),a.map(a=>(0,w.jsx)(bJ,{combo:a,strategy:k[a.name]||{},onSetStrategy:b=>A(a.name,b)},a.id)),g&&(0,w.jsx)(bN,{isOpen:!!g,combo:g,onClose:()=>h(null),onSave:a=>y(g.id,a),activeProviders:i},g.id)]})}',
+  'let bQ=new Set(["image","tts","stt","embedding","imageToText"]),bR={kindFilter:"llm"};',
 ].join("");
 
 const clientUi = [
@@ -31,6 +32,7 @@ const clientUi = [
   'function g1({combo:e,getCaps:t,activeProviders:s=[],copied:i,onCopy:n,onEdit:r,onDelete:o,strategy:c={},onSetStrategy:m}){let[x,p]=(0,a.useState)(!1),u=c.fallbackStrategy||"fallback",h=c.judgeModel||"";return(0,l.jsxs)(d.Zp,{padding:"sm",children:[(0,l.jsx)(d.l6,{options:f1,value:u,onChange:e=>m({fallbackStrategy:e.target.value}),selectClassName:"py-1.5 text-xs"}),"fusion"===u&&"details",(0,l.jsx)("button",{onClick:()=>r(e),children:"Edit"})]})}',
   'function g2({isOpen:e,combo:t,onClose:s,onSave:i,activeProviders:n,kindFilter:r=null}){let[o,c]=(0,a.useState)(t?.name||""),[u,h]=(0,a.useState)(t?.models||[]),[v,x]=(0,a.useState)(!1),[p,f]=(0,a.useState)(!1),[y,b]=(0,a.useState)(""),[k,w]=(0,a.useState)({}),M=e=>e.trim()?(b(""),!0):(b("Only letters, numbers, -, _ and . allowed"),!1),S=async()=>{M(o)&&(f(!0),await i({name:o.trim(),models:u}),f(!1))},E=!!t;return(0,l.jsxs)(l.Fragment,{children:[(0,l.jsx)(d.aF,{isOpen:e,onClose:s,title:E?"Edit Combo":"Create Combo",children:(0,l.jsxs)("div",{className:"flex flex-col gap-3",children:[(0,l.jsx)(d.pd,{label:"Combo Name",value:o,onChange:e=>c(e.target.value)}),(0,l.jsx)("label",{children:"Models"}),(0,l.jsx)("button",{onClick:()=>x(!0),children:"Add Model"}),(0,l.jsxs)("div",{className:"flex flex-col gap-2 pt-1 sm:flex-row",children:[(0,l.jsx)(d.$n,{onClick:s,children:"Cancel"}),(0,l.jsx)(d.$n,{onClick:S,children:p?"Saving...":E?"Save":"Create"})]})]})})]})}',
   'function g3(){let[e,t]=(0,a.useState)([]),[s,i]=(0,a.useState)(!1),[n,r]=(0,a.useState)(!1),[o,c]=(0,a.useState)(null),[u,h]=(0,a.useState)([]),[v,x]=(0,a.useState)({});let N=async()=>{let[e,t]=await Promise.all([fetch("/api/combos"),fetch("/api/settings")]),s=await e.json(),n=await t.json();t(s.combos||[]),x(n.comboStrategies||{})},F=async(e,t)=>{try{let s=await fetch(`/api/combos/${e}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(t)});if(s.ok)await N(),c(null);else{let e=await s.json();alert(e.error||"Failed to update combo")}}catch(e){console.log("Error updating combo:",e)}},W=async(e,t)=>{try{let s={...v},i={...s[e]||{},...t};i.fallbackStrategy&&"fallback"!==i.fallbackStrategy?s[e]=i:delete s[e],await fetch("/api/settings",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({comboStrategies:s})}),x(s)}catch(e){console.log("Error updating combo strategy:",e)}};return(0,l.jsxs)(l.Fragment,{children:[(0,l.jsx)("p",{children:"Group models under one name, then pick a strategy per combo:"}),(0,l.jsxs)("ul",{children:[(0,l.jsxs)("li",{children:[(0,l.jsx)("span",{children:"Fallback"})," — tries models in order (next on failure)"]}),(0,l.jsxs)("li",{children:[(0,l.jsx)("span",{children:"Round Robin"})," — rotates models across requests to spread load"]}),(0,l.jsxs)("li",{children:[(0,l.jsx)("span",{children:"Fusion"})," — queries all models in parallel, then a judge synthesizes one answer"]})]}),e.map(e=>(0,l.jsx)(g1,{combo:e,strategy:v[e.name]||{},onSetStrategy:t=>W(e.name,t)},e.id)),o&&(0,l.jsx)(g2,{isOpen:!!o,combo:o,onClose:()=>c(null),onSave:e=>F(o.id,e),activeProviders:u},o.id)]})}',
+  'let gQ=new Set(["image","tts","stt","embedding","imageToText"]),gR={kindFilter:"llm"};',
 ].join("");
 
 function fixture({ duplicate = false, valid = true, shadow = false, handler: handlerOverride, server = serverUi, client = clientUi } = {}) {
@@ -95,6 +97,10 @@ test("patcher dynamically discovers runtime and UI assets, patches once, and is 
   assert.equal((patched.match(/routeAutoCombo/g) || []).length, 2);
   assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,f,a,j\)/);
   assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,g,d,e\)/);
+  assert.match(patched, /clientIdentity:a\.headers\.get\("Authorization"\),conversationHeaders:\(headers=>Object\.fromEntries\(\(typeof headers\?\.entries==="function"\?\[\.\.\.headers\.entries\(\)\]:Object\.entries\(headers\|\|\{\}\)\)\.filter\(\(\[name\]\)=>\["x-9router-conversation-id","x-conversation-id","x-session-id","x-thread-id"\]\.includes\(name\.toLowerCase\(\)\)\)\)\)\(a\.headers\)/);
+  assert.match(patched, /decide:async\(decisionBody,decisionModel\)=>\{let request=a,response=await fetch\(new URL\("\/api\/v1\/systemone",request\.url\)/);
+  assert.match(patched, /body:JSON\.stringify\(\{\.\.\.decisionBody,model:decisionModel\}\)/);
+  assert.match(patched, /if\(!response\.ok\)throw Error\("decision-error"\)/);
   assert.match(patched, /const _arResolveu=\(0,r\.d_\);/);
   assert.match(patched, /const _arResolvef=\(0,h\.d_\);/);
   assert.equal(patch(dir, ["--check"]).status, 0);
@@ -219,7 +225,39 @@ test("card strategy persistence keeps dormant Auto Router configuration", () => 
     assert.match(source, /onSetStrategy:[A-Za-z_$][\w$]*=>_arSetStrategy\([A-Za-z_$][\w$]*\.name,[A-Za-z_$][\w$]*\)/);
   }
 });
+
+test("Edit Combo renders both Auto Router methods and reuses the normal model picker for Jev", () => {
+  const dir = fixture(); assert.equal(patch(dir).status, 0);
+  for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) {
+    const modal = modalSection(source);
+    for (const label of ["Routing method", "Local classifier", "Jev", "Jev decision model", "Tier 1 · Cheapest", "Advanced Jev settings", "Jev decision timeout (ms)"]) assert.ok(modal.includes(label));
+    assert.match(modal, /_arJevPicker&&\(0,[A-Za-z_$][\w$]*\.jsx\)\([A-Za-z_$][\w$]*,\{isOpen:_arJevPicker/);
+    assert.match(modal, /activeProviders:[A-Za-z_$][\w$]*/);
+    assert.match(modal, /kindFilter:"systemone"/);
+    assert.match(modal, /onSelect:model=>\{let value=typeof model==="string"\?model:model\?\.value\|\|model\?\.id\|\|""/);
+    assert.doesNotMatch(modal, /type:"text"[^}]*Jev decision model/);
+    assert.match(modal, /"jev"===_arConfig\.method\?\(0===index\?"Tier 1 · Cheapest"/);
+    assert.match(modal, /0===index\?"Easy":1===index\?"Hard":"Ignored"/);
+    assert.match(source, /next\.autoRouter=\{\.\.\.freshConfig,\.\.\.strategy\.autoRouter\}/);
+  }
+});
 test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v9/); assert.equal(source.split("9router-auto-router-ui:v9").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });
+
+test("patcher extends the normal picker typed kinds for System One only", () => {
+  const dir = fixture(); assert.equal(patch(dir).status, 0);
+  for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) {
+    assert.match(source, /new Set\(\["image","tts","stt","embedding","imageToText","systemone"\]\)\/\* 9router-auto-router-systemone-picker:v1 \*\//);
+    assert.equal((source.match(/9router-auto-router-systemone-picker:v1/g) || []).length, 1);
+  }
+  assert.equal(patch(dir, ["--check"]).status, 0);
+});
+
+test("patcher fails closed without the normal picker typed-kind filter", () => {
+  const result = patch(fixture({ server: serverUi.replace('new Set(["image","tts","stt","embedding","imageToText"])', 'new Set(["image","tts"])') }));
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Model picker candidates/);
+});
+
 
 // --- patcher robustness --------------------------------------------------------------------
 
@@ -243,6 +281,7 @@ test("patcher fails closed when the strategy selector is missing", () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /strategy selector/);
 });
+
 
 test("patcher fails closed when the Save path is incompatible", () => {
   const server = serverUi.replace("onSave:a=>y(g.id,a)", "onSave:a=>a");

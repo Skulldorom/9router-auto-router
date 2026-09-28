@@ -68,6 +68,7 @@ API_KEY=$(api -X POST --data '{"name":"integration"}' "http://127.0.0.1:${PORT}/
 set_auto() { api -X PATCH --data "{\"comboStrategies\":{\"agent\":{\"fallbackStrategy\":\"auto\",\"autoRouter\":${1}}}}" "http://127.0.0.1:${PORT}/api/settings" >/dev/null; }
 set_models() { api -X PUT --data "{\"name\":\"agent\",\"models\":${1}}" "http://127.0.0.1:${PORT}/api/combos/${AGENT_ID}" >/dev/null; }
 complete() { curl --silent --show-error --max-time 20 -H 'Content-Type: application/json' -H "Authorization: Bearer ${API_KEY}" --data "$1" "http://127.0.0.1:${PORT}/api/v1/chat/completions"; }
+complete_with_header() { curl --silent --show-error --max-time 20 -H 'Content-Type: application/json' -H "Authorization: Bearer ${API_KEY}" -H "X-9Router-Conversation-ID: $1" --data "$2" "http://127.0.0.1:${PORT}/api/v1/chat/completions"; }
 journal() { cat "${MOCK_DIR}/requests.jsonl" 2>/dev/null || true; }
 count_model() { journal | grep -c "$1" || true; }
 expect_error() {
@@ -135,4 +136,17 @@ fallback_response=$(complete '{"model":"agent","messages":[{"role":"user","conte
 printf '%s' "$fallback_response" | grep -q 'mock' || { echo "Ordinary fallback target failed: ${fallback_response}" >&2; exit 1; }
 [ "$(count_model fallback-combo-model)" -eq 1 ] || { echo "Ordinary fallback target was not executed normally." >&2; exit 1; }
 
-echo "Auto Router HTTP integration test passed: patched HTTP path selects exactly one target, preserves body/stream/tools, delegates into normal 9Router combo handling, and fails closed on self/auto/stale targets."
+# The canonical header must traverse the patched runtime request path and retain one
+# initial Jev decision for repeated requests in the same client/API-key conversation.
+set_auto '{"method":"jev","jev":{"decisionModel":"oc/jev-1.13-free"}}'
+header_request='{"model":"agent","messages":[{"role":"user","content":"rename one label sentinel-canonical-header"}]}'
+header_first=$(complete_with_header 'canonical-sticky-test' "$header_request")
+header_second=$(complete_with_header 'canonical-sticky-test' "$header_request")
+printf '%s' "$header_first" | grep -q 'mock' || { echo "Canonical-header Jev request did not reach the provider path: ${header_first}" >&2; exit 1; }
+printf '%s' "$header_second" | grep -q 'mock' || { echo "Repeated canonical-header Jev request did not reach the provider path: ${header_second}" >&2; exit 1; }
+[ "$(docker logs "$NAME" 2>&1 | grep -Ec 'method=jev.*source=(jev sticky=new|local-fallback)')" -eq 1 ] || { echo "Expected one initial Jev decision for repeated canonical-header requests." >&2; dump_container_logs "$NAME"; exit 1; }
+logs=$(docker logs "$NAME" 2>&1)
+printf '%s' "$logs" | grep -q 'canonical-sticky-test' && { echo "Auto Router logs leaked the canonical conversation header value." >&2; exit 1; }
+printf '%s' "$logs" | grep -q "${API_KEY}" && { echo "Auto Router logs leaked the API key." >&2; exit 1; }
+
+echo "Auto Router HTTP integration test passed: patched HTTP path selects exactly one target, preserves body/stream/tools, delegates into normal 9Router combo handling, proves canonical conversation-header Jev stickiness, and fails closed on self/auto/stale targets."

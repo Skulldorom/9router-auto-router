@@ -132,7 +132,7 @@ const phase = process.env.PHASE;
     for (const value of ["fallback", "round-robin", "fusion", "auto"]) {
       if (await strategy.locator(`option[value="${value}"]`).count() !== 1) throw new Error(`${phase} combo card omitted upstream/Auto Router strategy ${value}`);
     }
-    if (await card.getByText("Easy target", { exact: true }).count() || await card.getByText("Advanced", { exact: true }).count()) throw new Error(`${phase} leaked Auto Router detail controls onto the combo card`);
+    if (await card.getByText("Easy target", { exact: true }).count() || await card.getByText("Advanced classifier settings", { exact: true }).count()) throw new Error(`${phase} leaked Auto Router detail controls onto the combo card`);
     if (await route("hello") !== "coder-model") throw new Error(`${phase} legacy Auto Router did not route Easy requests to coder`);
     if (await route("fully audit this concurrency race condition") !== "coder-high-model") throw new Error(`${phase} legacy Auto Router did not route Hard requests to coder-high`);
 
@@ -172,11 +172,13 @@ const phase = process.env.PHASE;
     const modal = editModal();
     await modal.waitFor({ timeout: 10_000 });
     if (await modal.getByText("Strategy", { exact: true }).count()) throw new Error(`${phase} Edit Combo retained a Strategy selector`);
+    const routingMethod = modal.locator("label").filter({ hasText: /^Routing method/ }).locator("select");
+    if (await routingMethod.count() !== 1 || await routingMethod.inputValue() !== "local") throw new Error(`${phase} legacy Auto Router did not default to Local classifier`);
     for (const label of ["Easy", "Hard", "Ignored"]) if (await modal.getByText(label, { exact: true }).count() !== 1) throw new Error(`${phase} did not label ordered model target as ${label}`);
     if (await modal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count() !== 1) throw new Error(`${phase} did not identify pending legacy target migration`);
     const migratedModels = await displayedModels(modal);
     if (JSON.stringify(migratedModels) !== JSON.stringify(["coder", "coder-high", "coder-auto-model"])) { const { settings } = await settingsAndCombo(); throw new Error(`${phase} did not initialize model order from legacy routing: ${JSON.stringify(migratedModels)} settings=${JSON.stringify(settings.comboStrategies?.["coder-auto"])}`); }
-    await modal.getByText("Advanced", { exact: true }).click();
+    await modal.getByText("Advanced classifier settings", { exact: true }).click();
     const hardThreshold = modal.getByLabel(/Hard threshold/);
     if (await hardThreshold.inputValue() !== "7") throw new Error(`${phase} did not preserve advanced settings while switching strategies`);
     if (settingsPatches !== 7) throw new Error(`${phase} unexpectedly persisted modal edits before Save`);
