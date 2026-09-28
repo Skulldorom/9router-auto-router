@@ -243,7 +243,6 @@ For **Local**, ordered `models` are targets: `models[0]` is Easy, `models[1]` is
         "hardThreshold": 6,
         "longContextChars": 24000,
         "largeToolResultChars": 12000,
-        "manyTools": 16,
         "verbose": false
       }
     }
@@ -270,7 +269,7 @@ For **Jev**, every configured model is a candidate and must be ordered from chea
 }
 ```
 
-`jev.timeoutMs` controls how long Auto Router waits for the System One decision. It does not guarantee provider-side cancellation after timeout, so the timed-out request can still incur provider usage.
+`jev.timeoutMs` controls how long Auto Router waits for the System One decision. On timeout, Auto Router aborts its local fetch to `/api/v1/systemone` and takes the existing fallback or sticky-route path. Current 9Router releases do not propagate that request signal through the System One handler to its provider fetch, so this is best-effort local cancellation, not a guarantee that the provider request stops or avoids usage.
 
 The **Advanced** controls expose the classifier thresholds:
 
@@ -279,10 +278,9 @@ The **Advanced** controls expose the classifier thresholds:
 | Hard threshold | `6` | `1`–`100` | Score at which a request becomes hard |
 | Long context | `24000` | `1`–`10000000` | Character threshold for large context |
 | Large tool result | `12000` | `1`–`10000000` | Character threshold for large tool output |
-| Many tools | `16` | `1`–`10000` | Threshold for unusually large toolsets |
 | Verbose | `false` | — | Log structural routing metadata without request text |
 
-The UI restores an invalid saved or typed numeric value to that field's default. Runtime validation uses these same inclusive bounds for persisted configuration and legacy environment fallbacks; out-of-range values fall through to the next configuration source.
+The UI restores an invalid saved or typed numeric value to that field's default. Runtime validation uses these same inclusive bounds for persisted configuration and legacy environment fallbacks; out-of-range values fall through to the next configuration source. Static tool availability does not independently raise complexity: large agent tool catalogs can accompany trivial tasks. Actual tool calls, tool results, and tool-result size still contribute to classification.
 
 Configuration is resolved independently per field in this order:
 
@@ -309,10 +307,9 @@ Legacy environment variables remain fallback sources for classifier tuning only:
 | `AUTO_ROUTER_HARD_THRESHOLD` | `6` | Hard score threshold (`1`–`100`) |
 | `AUTO_ROUTER_LONG_CONTEXT_CHARS` | `24000` | Large-context threshold (`1`–`10000000`) |
 | `AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS` | `12000` | Large tool-output threshold (`1`–`10000000`) |
-| `AUTO_ROUTER_MANY_TOOLS` | `16` | Large-toolset threshold (`1`–`10000`) |
 | `AUTO_ROUTER_VERBOSE` | `false` | Emit structural metadata, never request text |
 
-These variables are compatibility fallbacks, not the recommended setup path. New installations should use the UI.
+These variables are compatibility fallbacks, not the recommended setup path. New installations should use the UI. Persisted `manyTools` and `AUTO_ROUTER_MANY_TOOLS` from older installations are accepted and ignored; an Auto Router save deliberately removes the obsolete persisted field.
 
 ## Updating
 

@@ -98,8 +98,8 @@ test("patcher dynamically discovers runtime and UI assets, patches once, and is 
   assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,f,a,j\)/);
   assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,g,d,e\)/);
   assert.match(patched, /clientIdentity:a\.headers\.get\("Authorization"\),conversationHeaders:\(headers=>Object\.fromEntries\(\(typeof headers\?\.entries==="function"\?\[\.\.\.headers\.entries\(\)\]:Object\.entries\(headers\|\|\{\}\)\)\.filter\(\(\[name\]\)=>\["x-9router-conversation-id","x-conversation-id","x-session-id","x-thread-id"\]\.includes\(name\.toLowerCase\(\)\)\)\)\)\(a\.headers\)/);
-  assert.match(patched, /decide:async\(decisionBody,decisionModel\)=>\{let request=a,response=await fetch\(new URL\("\/api\/v1\/systemone",request\.url\)/);
-  assert.match(patched, /body:JSON\.stringify\(\{\.\.\.decisionBody,model:decisionModel\}\)/);
+  assert.match(patched, /decide:async\(decisionBody,decisionModel,signal\)=>\{let request=a,response=await fetch\(new URL\("\/api\/v1\/systemone",request\.url\)/);
+  assert.match(patched, /body:JSON\.stringify\(\{\.\.\.decisionBody,model:decisionModel\}\),signal\}/);
   assert.match(patched, /if\(!response\.ok\)throw Error\("decision-error"\)/);
   assert.match(patched, /const _arResolveu=\(0,r\.d_\);/);
   assert.match(patched, /const _arResolvef=\(0,h\.d_\);/);
@@ -165,7 +165,7 @@ test("strategy option discovery preserves future upstream options", () => {
   const extra = `,{value:"adaptive",label:"Adaptive — tune per request"}`, server = serverUi.replace("let bI=[", "var bI = [").replace("}];function bJ", `}${extra}];function bJ`), client = clientUi.replace("let f1=[", "var f1 = [").replace("}];function g1", `}${extra}];function g1`), dir = fixture({ server, client }); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) assert.match(fs.readFileSync(file, "utf8"), /value:"adaptive",label:"Adaptive — tune per request"/);
 });
 test("Edit Combo labels ordered models without a Strategy or target selector", () => {
-  const dir = fixture(); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) { const modal = modalSection(fs.readFileSync(file, "utf8")); for (const label of ["Auto Router", "Easy", "Hard", "Ignored", "Advanced", "Hard threshold", "Long context threshold", "Large tool-result threshold", "Many-tools threshold", "Verbose logging"]) assert.ok(modal.includes(label)); for (const removed of ["\"Strategy\"", "Easy target", "Hard target", "availableCombos", "_arStrategyOptions"]) assert.ok(!modal.includes(removed), `modal retained ${removed}`); assert.match(modal, /0===index\?"Easy":1===index\?"Hard":"Ignored"/); assert.match(modal, /Models after position 2 are ignored by Auto Router/); assert.match(modal, /requires two distinct usable models in positions 1 \(Easy\) and 2 \(Hard\)/); }
+  const dir = fixture(); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) { const modal = modalSection(fs.readFileSync(file, "utf8")); for (const label of ["Auto Router", "Easy", "Hard", "Ignored", "Advanced", "Hard threshold", "Long context threshold", "Large tool-result threshold", "Verbose logging"]) assert.ok(modal.includes(label)); for (const removed of ["\"Strategy\"", "Easy target", "Hard target", "availableCombos", "_arStrategyOptions"]) assert.ok(!modal.includes(removed), `modal retained ${removed}`); assert.match(modal, /0===index\?"Easy":1===index\?"Hard":"Ignored"/); assert.match(modal, /Models after position 2 are ignored by Auto Router/); assert.match(modal, /requires two distinct usable models in positions 1 \(Easy\) and 2 \(Hard\)/); }
 });
 test("legacy migration initializes visible model order from effective runtime targets", () => {
   const dir = fixture(); assert.equal(patch(dir).status, 0);
@@ -177,7 +177,7 @@ test("legacy migration initializes visible model order from effective runtime ta
     assert.match(modal, /_arLegacyMigration&&\(0,[A-Za-z_$][\w$]*\.jsx\)\("p",\{className:"text-text-muted",children:"Legacy targets remain effective until this model order is saved\."\}\)/);
     assert.match(modal, /_arEffectiveModels\|\|.+?\?\.models\|\|\[\]/);
     assert.match(modal, /let _arTargets=[A-Za-z_$][\w$]*\.slice\(0,2\)\.map/);
-    assert.match(modal, /let \{easyTarget:_arEasyTarget,hardTarget:_arHardTarget,\.\.\.config\}/);
+    assert.match(modal, /let \{easyTarget:_arEasyTarget,hardTarget:_arHardTarget,manyTools:_arManyTools,\.\.\.config\}/);
     assert.match(modal, /"auto"===_arInitialStrategy\.fallbackStrategy\?\{autoRouter:config\}:null/);
     assert.match(patched, /let changed=\{\.\.\.original,\.\.\.comboData,models:comboData\.models\}/);
   }
@@ -201,11 +201,13 @@ test("generated Save keeps validation, bounds, persistence ordering, rollback, a
   const dir = fixture(); assert.equal(patch(dir).status, 0);
   for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) {
     const modal = modalSection(source);
-    for (const [key, min, max] of [["hardThreshold", 1, 100], ["longContextChars", 1, 10000000], ["largeToolResultChars", 1, 10000000], ["manyTools", 1, 10000]]) {
+    for (const [key, min, max] of [["hardThreshold", 1, 100], ["longContextChars", 1, 10000000], ["largeToolResultChars", 1, 10000000]]) {
       assert.match(modal, new RegExp(`${key}:\\[${min},${max}\\]`));
       assert.match(modal, new RegExp(`_arNumber\\([^)]*,"${key}"`));
       assert.match(modal, new RegExp(`min:${min},max:${max}`));
     }
+    assert.doesNotMatch(modal, /Many-tools threshold|_arTools|manyTools:\[/);
+    assert.match(modal, /manyTools:[A-Za-z_$][\w$]*,\.\.\.config/);
     assert.match(modal, /if\(![A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\)return/);
     assert.match(modal, /[A-Za-z_$][\w$]*\(!0\);try\{/);
     assert.match(modal, /finally\{[A-Za-z_$][\w$]*\(!1\)\}/);

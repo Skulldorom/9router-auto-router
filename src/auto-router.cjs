@@ -88,7 +88,6 @@ function getConfig(env = process.env, explicit = {}) {
     hardThreshold: configuredPositiveInt(selected, "hardThreshold", env.AUTO_ROUTER_HARD_THRESHOLD, DEFAULTS.hardThreshold),
     longContextChars: configuredPositiveInt(selected, "longContextChars", env.AUTO_ROUTER_LONG_CONTEXT_CHARS, DEFAULTS.longContextChars),
     largeToolResultChars: configuredPositiveInt(selected, "largeToolResultChars", env.AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS, DEFAULTS.largeToolResultChars),
-    manyTools: configuredPositiveInt(selected, "manyTools", env.AUTO_ROUTER_MANY_TOOLS, DEFAULTS.manyTools),
     verbose: configuredBoolean(selected, "verbose", env.AUTO_ROUTER_VERBOSE, DEFAULTS.verbose),
     method: selected.method === "jev" ? "jev" : "local",
     jev: {
@@ -417,10 +416,19 @@ function candidateIndex(response, candidates, startIndex = 0) {
   if (!Number.isSafeInteger(index) || index < startIndex || index >= startIndex + candidates.length) throw new Error("invalid-candidate");
   return index - startIndex;
 }
-function deadline(promise, timeoutMs, timers = globalThis) {
+function deadline(start, timeoutMs, timers = globalThis) {
+  const controller = new globalThis.AbortController();
   let timeout;
-  const expired = new Promise((_, reject) => { timeout = timers.setTimeout(() => reject(new Error("timeout")), timeoutMs); });
-  return Promise.race([Promise.resolve(promise), expired]).finally(() => timers.clearTimeout(timeout));
+  const expired = new Promise((_, reject) => {
+    timeout = timers.setTimeout(() => {
+      reject(new Error("timeout"));
+      controller.abort();
+    }, timeoutMs);
+  });
+  let pending;
+  try { pending = Promise.resolve(start(controller.signal)); }
+  catch (error) { pending = Promise.reject(error); }
+  return Promise.race([pending, expired]).finally(() => timers.clearTimeout(timeout));
 }
 function failureReason(error) {
   const message = error instanceof Error ? error.message : String(error);
@@ -440,8 +448,11 @@ async function selectJevRoute({ body, comboName, comboStrategies, globalStrategy
   if (!allowed.length) throw new Error("invalid-candidate");
   const request = jevRequest(body, allowed, startIndex);
   request.model = config.jev.decisionModel;
-  const response = await deadline(decide(request, config.jev.decisionModel), config.jev.timeoutMs);
-  const index = startIndex + candidateIndex(await responseJson(response), allowed, startIndex);
+  const index = await deadline(async (signal) => startIndex + candidateIndex(
+    await responseJson(await decide(request, config.jev.decisionModel, signal)),
+    allowed,
+    startIndex,
+  ), config.jev.timeoutMs);
   return { target: candidates[index], index, candidates, config };
 }
 function selectJevFallbackRoute(body, comboName, options = {}) {
@@ -495,6 +506,11 @@ function stickyKey(comboName, body, clientIdentity, headers) {
   return conversation && client ? `${comboName}\u0000${identityHash(client)}\u0000${identityHash(conversation)}` : null;
 }
 function candidateSignature(candidates) { return JSON.stringify(candidates); }
+function decisionFingerprint(body, candidates, startIndex, decisionModel) {
+  const request = jevRequest(body, candidates.slice(startIndex), startIndex);
+  request.model = decisionModel;
+  return createHash("sha256").update(JSON.stringify(request)).digest("hex");
+}
 function cleanupStickyRoutes(now) {
   for (const [key, entry] of jevStickyRoutes) if (entry.expiresAt <= now) jevStickyRoutes.delete(key);
   while (jevStickyRoutes.size > JEV_STICKY_MAX_ENTRIES) jevStickyRoutes.delete(jevStickyRoutes.keys().next().value);
@@ -509,6 +525,8 @@ function readStickyRoute(key, candidates, now) {
   }
   entry.expiresAt = now + JEV_STICKY_TTL_MS;
   entry.escalationScore = Number.isFinite(entry.escalationScore) ? entry.escalationScore : 0;
+  jevStickyRoutes.delete(key);
+  jevStickyRoutes.set(key, entry);
   return entry;
 }
 function writeStickyRoute(key, route, now, pending) {
@@ -520,11 +538,11 @@ function writeStickyRoute(key, route, now, pending) {
   jevStickyRoutes.set(key, { target: route.target, index: route.index, signature, escalationScore: route.classification?.level === "hard" ? route.classification.escalationScore : 0, expiresAt: now + JEV_STICKY_TTL_MS });
   cleanupStickyRoutes(now);
 }
-function pendingSelection(key, signature, mode, startIndex, select) {
+function pendingSelection(key, signature, mode, startIndex, fingerprint, select) {
   if (!key) return { promise: Promise.resolve().then(select), owner: true, entry: null, release() {} };
   const pending = jevStickyPending.get(key);
-  if (pending && pending.signature === signature && pending.mode === mode && pending.startIndex === startIndex) return { promise: pending.promise, owner: false, entry: pending, release() {} };
-  const entry = { signature, mode, startIndex, promise: Promise.resolve().then(select) };
+  if (pending && pending.signature === signature && pending.mode === mode && pending.startIndex === startIndex && pending.fingerprint === fingerprint) return { promise: pending.promise, owner: false, entry: pending, release() {} };
+  const entry = { signature, mode, startIndex, fingerprint, promise: Promise.resolve().then(select) };
   jevStickyPending.set(key, entry);
   return { promise: entry.promise, owner: true, entry, release() { if (jevStickyPending.get(key) === entry) jevStickyPending.delete(key); } };
 }
@@ -555,7 +573,7 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
         if (route.classification.level === "hard" && route.classification.escalationScore > sticky.escalationScore && route.index < route.candidates.length - 1) {
           previousIndex = route.index;
           const classification = route.classification, retained = route;
-          const selection = pendingSelection(cacheKey, signature, "upgrade", previousIndex, async () => {
+          const selection = pendingSelection(cacheKey, signature, "upgrade", previousIndex, decisionFingerprint(body, prepared.candidates, previousIndex, prepared.config.jev.decisionModel), async () => {
             try {
               const selected = await selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, startIndex: previousIndex, prepared });
               selected.classification = classification;
@@ -571,7 +589,7 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
           ({ route, source, failure } = await selection.promise);
         } else source = "sticky";
       } else {
-        const selection = pendingSelection(cacheKey, signature, "initial", 0, async () => {
+        const selection = pendingSelection(cacheKey, signature, "initial", 0, decisionFingerprint(body, prepared.candidates, 0, prepared.config.jev.decisionModel), async () => {
           try {
             const selected = await selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, prepared });
             selected.classification = classifyTaskComplexity(body, prepared.config);
