@@ -283,9 +283,9 @@ function keywordMatches(text) {
 
 function classifyTaskComplexity(body, config = getConfig()) {
   try {
-    if (!body || typeof body !== "object" || Array.isArray(body)) return { level: "hard", score: config.hardThreshold, reasons: ["invalid-request"], metadata: {} };
+    if (!body || typeof body !== "object" || Array.isArray(body)) return { level: "hard", score: config.hardThreshold, escalationScore: config.hardThreshold, reasons: ["invalid-request"], metadata: {} };
     const state = inspectRequest(body), tools = normalizeTools(body);
-    if (state.chars === 0 && state.messageCount === 0) return { level: "hard", score: config.hardThreshold, reasons: ["empty-request"], metadata: {} };
+    if (state.chars === 0 && state.messageCount === 0) return { level: "hard", score: config.hardThreshold, escalationScore: config.hardThreshold, reasons: ["empty-request"], metadata: {} };
     let score = 0;
     const reasons = [], add = (points, reason) => { score += points; reasons.push(reason); };
     if (state.chars >= config.longContextChars) add(4, "large-context");
@@ -322,10 +322,11 @@ function classifyTaskComplexity(body, config = getConfig()) {
       for (const reason of previousMatches.weak) addHistorical(WEAK_WEIGHT / 3, reason);
       if (historicalSemanticScore === historicalSemanticCap) break;
     }
+    const escalationScore = score;
     score = Math.min(score, config.hardThreshold + 1);
-    return { level: score >= config.hardThreshold ? "hard" : "easy", score, reasons: [...new Set(reasons)], metadata: { chars: state.chars, systemChars: state.systemChars, messages: state.messageCount, systemMessages: state.systemMessages, tools: tools.length, toolCalls: state.toolCalls, toolResults: state.toolResults, toolResultChars: state.toolResultChars, modalities: state.modalities } };
+    return { level: score >= config.hardThreshold ? "hard" : "easy", score, escalationScore, reasons: [...new Set(reasons)], metadata: { chars: state.chars, systemChars: state.systemChars, messages: state.messageCount, systemMessages: state.systemMessages, tools: tools.length, toolCalls: state.toolCalls, toolResults: state.toolResults, toolResultChars: state.toolResultChars, modalities: state.modalities } };
   } catch {
-    return { level: "hard", score: config.hardThreshold, reasons: ["classifier-error"], metadata: {} };
+    return { level: "hard", score: config.hardThreshold, escalationScore: config.hardThreshold, reasons: ["classifier-error"], metadata: {} };
   }
 }
 
@@ -488,9 +489,10 @@ function resolveConversationIdentity({ body, headers } = {}) {
 }
 function stableConversationId(body) { return resolveConversationIdentity({ body }); }
 // Sticky routes require API-key-scoped client identity and a recognized conversation identity.
+function identityHash(identity) { return createHash("sha256").update(identity).digest("hex"); }
 function stickyKey(comboName, body, clientIdentity, headers) {
   const conversation = resolveConversationIdentity({ body, headers }), client = nonEmptyString(clientIdentity);
-  return conversation && client ? `${comboName}\u0000${createHash("sha256").update(client).digest("hex")}\u0000${conversation}` : null;
+  return conversation && client ? `${comboName}\u0000${identityHash(client)}\u0000${identityHash(conversation)}` : null;
 }
 function candidateSignature(candidates) { return JSON.stringify(candidates); }
 function cleanupStickyRoutes(now) {
@@ -506,7 +508,7 @@ function readStickyRoute(key, candidates, now) {
     return null;
   }
   entry.expiresAt = now + JEV_STICKY_TTL_MS;
-  entry.hardScore = Number.isFinite(entry.hardScore) ? entry.hardScore : 0;
+  entry.escalationScore = Number.isFinite(entry.escalationScore) ? entry.escalationScore : 0;
   return entry;
 }
 function writeStickyRoute(key, route, now, pending) {
@@ -515,7 +517,7 @@ function writeStickyRoute(key, route, now, pending) {
   if (existing && existing.signature !== signature) return;
   cleanupStickyRoutes(now);
   jevStickyRoutes.delete(key);
-  jevStickyRoutes.set(key, { target: route.target, index: route.index, signature, hardScore: route.classification?.level === "hard" ? route.classification.score : 0, expiresAt: now + JEV_STICKY_TTL_MS });
+  jevStickyRoutes.set(key, { target: route.target, index: route.index, signature, escalationScore: route.classification?.level === "hard" ? route.classification.escalationScore : 0, expiresAt: now + JEV_STICKY_TTL_MS });
   cleanupStickyRoutes(now);
 }
 function pendingSelection(key, signature, mode, startIndex, select) {
@@ -550,7 +552,7 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
       const signature = candidateSignature(prepared.candidates), sticky = readStickyRoute(cacheKey, prepared.candidates, now);
       if (sticky) {
         route = { target: sticky.target, index: sticky.index, candidates: prepared.candidates, config: prepared.config, classification: classifyTaskComplexity(body, prepared.config) };
-        if (route.classification.level === "hard" && route.classification.score > sticky.hardScore && route.index < route.candidates.length - 1) {
+        if (route.classification.level === "hard" && route.classification.escalationScore > sticky.escalationScore && route.index < route.candidates.length - 1) {
           previousIndex = route.index;
           const classification = route.classification, retained = route;
           const selection = pendingSelection(cacheKey, signature, "upgrade", previousIndex, async () => {
@@ -559,7 +561,7 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
               selected.classification = classification;
               return { route: selected, source: "jev-upgrade", failure: null };
             } catch (error) {
-              sticky.hardScore = classification.score;
+              sticky.escalationScore = classification.escalationScore;
               return { route: retained, source: "sticky", failure: failureReason(error) };
             }
           });
@@ -613,4 +615,4 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   }
 }
 
-module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget, effectiveTargets, jevCandidates, jevRequest, candidateIndex, deadline, stableConversationId, resolveConversationIdentity };
+module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget, effectiveTargets, jevCandidates, jevRequest, candidateIndex, deadline, stableConversationId, resolveConversationIdentity, stickyKey };

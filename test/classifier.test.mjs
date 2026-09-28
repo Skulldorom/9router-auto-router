@@ -908,3 +908,41 @@ test("OpenHands-style repeated scaffolding reuses a Jev selection", async () => 
   assert.deepEqual(await Promise.all(routed.map((response) => response.text())), ["coder", "coder"]);
   assert.equal(decisions, 1);
 });
+
+
+test("classifier preserves capped public scores while exposing uncapped escalation complexity", () => {
+  const lower = classifyTaskComplexity(message("Fully audit this repository concurrency race condition."));
+  const higher = classifyTaskComplexity(message("Fully audit this repository concurrency race condition. " + "x".repeat(router.DEFAULTS.longContextChars)));
+  assert.equal(lower.score, router.DEFAULTS.hardThreshold + 1);
+  assert.equal(higher.score, router.DEFAULTS.hardThreshold + 1);
+  assert.ok(higher.escalationScore > lower.escalationScore);
+});
+
+test("Jev sticky cache keys hash both client and conversation identities", () => {
+  const body = stickyBody("Rename one label.", "conversation-secret");
+  const same = router.stickyKey("auto", body, "Bearer client-secret");
+  assert.equal(same, router.stickyKey("auto", body, "Bearer client-secret"));
+  assert.notEqual(same, router.stickyKey("auto", stickyBody("Rename one label.", "other-conversation"), "Bearer client-secret"));
+  assert.notEqual(same, router.stickyKey("auto", body, "Bearer other-client"));
+  assert.ok(!same.includes("conversation-secret"));
+  assert.ok(!same.includes("Bearer client-secret"));
+});
+
+test("Jev upgrades when a higher uncapped escalation score shares the capped hard score", async () => {
+  const lowerBody = stickyBody("Fully audit this repository concurrency race condition.", "capped-escalation-upgrade");
+  const higherBody = stickyBody("Fully audit this repository concurrency race condition. " + "x".repeat(router.DEFAULTS.longContextChars), "capped-escalation-upgrade");
+  const lower = classifyTaskComplexity(lowerBody), higher = classifyTaskComplexity(higherBody);
+  assert.equal(lower.score, router.DEFAULTS.hardThreshold + 1);
+  assert.equal(higher.score, router.DEFAULTS.hardThreshold + 1);
+  assert.ok(higher.escalationScore > lower.escalationScore, "the old capped-score comparison could not upgrade");
+  const requests = [];
+  const decide = async (request) => {
+    requests.push(request);
+    return { answers: { candidate: { type: "choice", choice: requests.length === 1 ? "candidate_2" : "candidate_3" } } };
+  };
+  const initial = await stickyRoute({ body: lowerBody, decide, now: 275 });
+  const upgraded = await stickyRoute({ body: higherBody, decide, now: 276 });
+  assert.deepEqual([await initial.text(), await upgraded.text()], ["coder", "coder-high"]);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(Object.keys(requests[1].questions.candidate.criteria), ["candidate_2", "candidate_3", "candidate_4"]);
+});
