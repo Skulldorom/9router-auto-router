@@ -172,7 +172,7 @@ test("legacy migration initializes visible model order from effective runtime ta
   for (const file of uiFiles(dir)) {
     const patched = fs.readFileSync(file, "utf8"), modal = modalSection(patched);
     assert.match(modal, /_arStoredModels=Array\.isArray\(.+?\?\.models\|\|\[\]\)\?.+?\?\.models\|\|\[\]:\[\]/);
-    assert.match(modal, /_arLegacyMigration="auto"===_arInitialStrategy\.fallbackStrategy&&_arLegacyTargets/);
+    assert.match(modal, /_arLegacyMigration="auto"===_arInitialStrategy\.fallbackStrategy&&"jev"!==_arSavedConfig\.method&&_arLegacyTargets/);
     assert.match(modal, /_arEffectiveModels=_arLegacyMigration\?\[_arSavedConfig\.easyTarget\.trim\(\),_arSavedConfig\.hardTarget\.trim\(\),\.\.\._arStoredModels\.filter\(model=>typeof model!=="string"\|\|\(model\.trim\(\)!==_arSavedConfig\.easyTarget\.trim\(\)&&model\.trim\(\)!==_arSavedConfig\.hardTarget\.trim\(\)\)\)\]:null/);
     assert.match(modal, /_arLegacyMigration&&\(0,[A-Za-z_$][\w$]*\.jsx\)\("p",\{className:"text-text-muted",children:"Legacy targets remain effective until this model order is saved\."\}\)/);
     assert.match(modal, /_arEffectiveModels\|\|.+?\?\.models\|\|\[\]/);
@@ -183,6 +183,19 @@ test("legacy migration initializes visible model order from effective runtime ta
     assert.match(patched, /let changed=\{\.\.\.original,\.\.\.comboData,models:comboData\.models\}/);
   }
 });
+
+test("legacy JEV Edit Combo preserves stored candidates while normalizing its decision model", () => {
+  const dir = fixture();
+  assert.equal(patch(dir).status, 0);
+  for (const file of uiFiles(dir)) {
+    const modal = modalSection(fs.readFileSync(file, "utf8"));
+    assert.match(modal, /"jev"!==_arSavedConfig\.method/);
+    assert.match(modal, /_arEffectiveModels\|\|.+?\.models\|\|\[\]/);
+    assert.match(modal, /_arLegacyDecisionModel=typeof _arSavedConfig\.jev\?\.decisionModel==="string"/);
+    assert.match(modal, /let \{decisionModel:_arLegacyDecision,\.\.\.jev\}=config\.jev;config\.jev=jev/);
+  }
+});
+
 
 test("Edit Combo Save fetches fresh settings, merges strategy entries, and preserves dormant configuration", () => {
   const dir = fixture(); assert.equal(patch(dir).status, 0);

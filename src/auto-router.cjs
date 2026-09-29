@@ -537,7 +537,7 @@ function resolveConversationIdentity({ body, headers } = {}) {
 function stableConversationId(body) { return resolveConversationIdentity({ body }); }
 // Pending decisions use hashed client/conversation identity only for isolation and coalescing.
 function identityHash(identity) { return createHash("sha256").update(identity).digest("hex"); }
-function pendingKey(comboName, body, clientIdentity, headers) {
+function pendingScope(comboName, body, clientIdentity, headers) {
   const conversation = resolveConversationIdentity({ body, headers }), client = nonEmptyString(clientIdentity);
   return conversation && client ? `${comboName}\u0000${identityHash(client)}\u0000${identityHash(conversation)}` : null;
 }
@@ -547,13 +547,21 @@ function decisionFingerprint(body, candidates, decisionModels) {
   request.model = decisionModels;
   return createHash("sha256").update(JSON.stringify(request)).digest("hex");
 }
-function pendingSelection(key, signature, fingerprint, select) {
-  if (!key) return { promise: Promise.resolve().then(select), release() {} };
+function pendingKey(comboName, body, clientIdentity, headers, candidates = [], decisionModels = []) {
+  const scope = pendingScope(comboName, body, clientIdentity, headers);
+  return scope ? `${scope}\u0000${identityHash(candidateSignature(candidates, decisionModels))}\u0000${decisionFingerprint(body, candidates, decisionModels)}` : null;
+}
+function pendingSelection(key, select) {
+  if (!key) return { promise: Promise.resolve().then(select) };
   const pending = jevPending.get(key);
-  if (pending && pending.signature === signature && pending.fingerprint === fingerprint) return { promise: pending.promise, release() {} };
-  const entry = { signature, fingerprint, promise: Promise.resolve().then(select) };
+  if (pending) return { promise: pending.promise };
+  const entry = { promise: Promise.resolve().then(select) };
   jevPending.set(key, entry);
-  return { promise: entry.promise, release() { if (jevPending.get(key) === entry) jevPending.delete(key); } };
+  entry.promise.then(
+    () => { if (jevPending.get(key) === entry) jevPending.delete(key); },
+    () => { if (jevPending.get(key) === entry) jevPending.delete(key); },
+  );
+  return { promise: entry.promise };
 }
 function errorResponse(message) { return new Response(JSON.stringify({ error: { message: `AUTO-ROUTER: ${message}` } }), { status: 400, headers: { "Content-Type": "application/json" } }); }
 async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy, log, delegate, targetExists, models, decide, clientIdentity, conversationHeaders }) {
@@ -566,7 +574,6 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   const nextActive = active || new Set();
   if (body && typeof body === "object") activeAutoCombos.set(body, nextActive);
   nextActive.add(comboName);
-  let releasePending = null;
   try {
     const persisted = comboStrategies?.[comboName]?.autoRouter;
     const method = getConfig(process.env, persisted).method;
@@ -575,23 +582,18 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
       let prepared;
       try { prepared = jevOptions(comboName, { comboStrategies, globalStrategy, models }); }
       catch (error) { log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`); return errorResponse(error.message); }
-      const key = pendingKey(comboName, body, clientIdentity, conversationHeaders);
-      const signature = candidateSignature(prepared.candidates, prepared.config.jev.decisionModels);
-      const fingerprint = decisionFingerprint(body, prepared.candidates, prepared.config.jev.decisionModels);
-      const selection = pendingSelection(key, signature, fingerprint, async () => {
-        try {
-          const selected = await selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, prepared, log });
-          selected.classification = classifyTaskComplexity(body, prepared.config);
-          return { route: selected, source: "jev", failure: null };
-        } catch (error) {
-          const fallbackFailure = failureReason(error);
-          const decisionModels = prepared.config.jev.decisionModels;
-          log.info("AUTO-ROUTER", `combo=${comboName} method=jev ${decisionModels.length === 1 ? "no fallback JEV configured" : "all configured JEV decision models failed"}; using local router`);
-          return { route: selectJevFallbackRoute(body, comboName, { comboStrategies, globalStrategy, models }), source: "local-fallback", failure: fallbackFailure };
-        }
-      });
-      releasePending = selection.release;
-      ({ route, source, failure } = await selection.promise);
+      const key = pendingKey(comboName, body, clientIdentity, conversationHeaders, prepared.candidates, prepared.config.jev.decisionModels);
+      const selection = pendingSelection(key, () => selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, prepared, log }));
+      try {
+        route = { ...await selection.promise, classification: classifyTaskComplexity(body, prepared.config) };
+        source = "jev";
+      } catch (error) {
+        failure = failureReason(error);
+        const decisionModels = prepared.config.jev.decisionModels;
+        log.info("AUTO-ROUTER", `combo=${comboName} method=jev ${decisionModels.length === 1 ? "no fallback JEV configured" : "all configured JEV decision models failed"}; using local router`);
+        route = selectJevFallbackRoute(body, comboName, { comboStrategies, globalStrategy, models });
+        source = "local-fallback";
+      }
     } else {
       try { route = selectRoute(body, comboName, { comboStrategies, globalStrategy, models }); }
       catch (error) { log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`); return errorResponse(error.message); }
@@ -612,7 +614,6 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
     if (config.verbose && route.classification) log.info("AUTO-ROUTER", `combo=${comboName} metadata=${JSON.stringify(route.classification.metadata)}`);
     return await delegate(body, target);
   } finally {
-    if (releasePending) releasePending();
     nextActive.delete(comboName);
     if (nextActive.size === 0 && body && typeof body === "object") activeAutoCombos.delete(body);
   }

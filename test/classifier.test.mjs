@@ -921,6 +921,45 @@ test("pending Jev decisions do not cross candidate configuration changes", async
   assert.deepEqual([await (await oldRequest).text(), await (await newRequest).text()], ["old-coder", "new-coder"]);
 });
 
+test("coalesced failed Jev decisions run Local fallback independently per caller", async () => {
+  const sharedTail = ["context alpha", "context beta", "Rename one label."];
+  const body = (history) => ({
+    conversation_id: "shared-failed-decision",
+    messages: [
+      ...history.map((content) => ({ role: "user", content })),
+      ...sharedTail.map((content) => ({ role: "user", content })),
+      { role: "assistant", content: [{ type: "image_url", image_url: "https://example.invalid/image" }] },
+    ],
+  });
+  const audit = body(["Fully audit project.", "Fully audit project.", "Fully audit project."]);
+  const simple = body(["Simple edit request.", "Simple edit request.", "Simple edit request."]);
+  const config = { auto: { autoRouter: { method: "jev", hardThreshold: 4, jev: { decisionModels: ["judge"] } } } };
+  let reject;
+  const decide = () => new Promise((resolve, rejectDecision) => { reject = rejectDecision; });
+  const first = jevRoute({ body: audit, decide, comboStrategies: config });
+  await Promise.resolve();
+  const second = jevRoute({ body: simple, decide, comboStrategies: config });
+  await Promise.resolve();
+  reject(new Error("provider down"));
+  assert.deepEqual([await (await first).text(), await (await second).text()], ["coder", "cheap"]);
+});
+
+test("Jev coalescing retains an earlier A decision across concurrent B", async () => {
+  const decisions = [];
+  const decide = () => new Promise((resolve) => { decisions.push(resolve); });
+  const firstA = jevRoute({ body: routeBody("Rename one label.", "a-b-a"), decide });
+  await Promise.resolve();
+  const B = jevRoute({ body: routeBody("Fully audit this repository concurrency race condition.", "a-b-a"), decide });
+  await Promise.resolve();
+  const secondA = jevRoute({ body: routeBody("Rename one label.", "a-b-a"), decide });
+  await Promise.resolve();
+  assert.equal(decisions.length, 2, "A2 must share A1 instead of starting a third JEV decision");
+  decisions[0]({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  decisions[1]({ answers: { candidate: { type: "choice", choice: "candidate_4" } } });
+  assert.deepEqual([await (await firstA).text(), await (await B).text(), await (await secondA).text()], ["coder", "premium", "coder"]);
+});
+
+
 test("Jev candidate ordering and rank validation remain unchanged", async () => {
   const request = router.jevRequest(routeBody("Rename one label."), ["cheap", "coder", "premium"]);
   assert.deepEqual(Object.keys(request.questions.candidate.criteria), ["candidate_1", "candidate_2", "candidate_3"]);
