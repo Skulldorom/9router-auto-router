@@ -98,9 +98,9 @@ test("patcher dynamically discovers runtime and UI assets, patches once, and is 
   assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,f,a,j\)/);
   assert.match(patched, /delegate:\(nextBody,target\)=>z\(nextBody,target,g,d,e\)/);
   assert.match(patched, /clientIdentity:a\.headers\.get\("Authorization"\),conversationHeaders:\(headers=>Object\.fromEntries\(\(typeof headers\?\.entries==="function"\?\[\.\.\.headers\.entries\(\)\]:Object\.entries\(headers\|\|\{\}\)\)\.filter\(\(\[name\]\)=>\["x-9router-conversation-id","x-conversation-id","x-session-id","x-thread-id"\]\.includes\(name\.toLowerCase\(\)\)\)\)\)\(a\.headers\)/);
-  assert.match(patched, /decide:async\(decisionBody,decisionModel,signal\)=>\{let request=a,response=await fetch\(new URL\("\/api\/v1\/systemone",request\.url\)/);
-  assert.match(patched, /body:JSON\.stringify\(\{\.\.\.decisionBody,model:decisionModel\}\),signal\}/);
-  assert.match(patched, /if\(!response\.ok\)throw Error\("decision-error"\)/);
+  assert.equal((patched.match(/dispatchInternalSystemOne/g) || []).length, 2);
+  assert.match(patched, /decide:\(decisionBody,decisionModel,signal\)=>require\("\/opt\/9router-auto-router\/internal-systemone\.cjs"\)\.dispatchInternalSystemOne\(\{body:decisionBody,model:decisionModel,authorization:a\.headers\.get\("Authorization"\),signal\}\)/);
+  assert.ok(!patched.includes('new URL("/api/v1/systemone",request.url)'));
   assert.match(patched, /const _arResolveu=\(0,r\.d_\);/);
   assert.match(patched, /const _arResolvef=\(0,h\.d_\);/);
   assert.equal(patch(dir, ["--check"]).status, 0);
