@@ -89,7 +89,7 @@ test("nested request wrappers use their canonical tool or function collection", 
 test("numeric configuration accepts documented boundaries and rejects adjacent values", () => {
   const fields = Object.entries(router.NUMERIC_BOUNDS).filter(([key]) => key !== "jevTimeoutMs");
   const explicit = Object.fromEntries(fields.map(([key, bounds]) => [key, bounds.max]));
-  assert.deepEqual(router.getConfig({}, explicit), { ...Object.fromEntries(Object.entries(router.DEFAULTS).filter(([key]) => key !== "jevTimeoutMs")), ...explicit, method: "local", jev: { decisionModel: null, timeoutMs: router.DEFAULTS.jevTimeoutMs } });
+  assert.deepEqual(router.getConfig({}, explicit), { ...Object.fromEntries(Object.entries(router.DEFAULTS).filter(([key]) => key !== "jevTimeoutMs")), ...explicit, method: "local", jev: { decisionModel: null, decisionModels: [], timeoutMs: router.DEFAULTS.jevTimeoutMs } });
   assert.equal(router.getConfig({}, { jev: { timeoutMs: router.NUMERIC_BOUNDS.jevTimeoutMs.max } }).jev.timeoutMs, router.NUMERIC_BOUNDS.jevTimeoutMs.max);
 
   for (const [key, { min, max }] of fields) {
@@ -365,7 +365,7 @@ test("verbose routing logs structured decisions without request text", async () 
     delegate: () => new Response("ok"),
   });
   assert.equal(response.status, 200);
-  assert.ok(entries.some((entry) => /combo=coder-auto level=easy target=coder score=\d+ reasons=/.test(entry)));
+  assert.ok(entries.some((entry) => /combo=coder-auto method=local rank=1\/2 score=\d+ target=coder reasons=/.test(entry)));
   assert.ok(entries.some((entry) => /combo=coder-auto metadata=/.test(entry)));
   assert.ok(entries.every((entry) => !entry.includes(prompt)));
 });
@@ -408,7 +408,7 @@ test("invalid explicit numeric values fall back to valid legacy values", () => {
 
 test("invalid per-combo fields independently fall back to valid legacy values", () => {
   const config = router.getConfig({ AUTO_ROUTER_EASY_TARGET: "env-easy", AUTO_ROUTER_HARD_TARGET: "env-hard", AUTO_ROUTER_HARD_THRESHOLD: "8", AUTO_ROUTER_LONG_CONTEXT_CHARS: "28000", AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS: "14000", AUTO_ROUTER_MANY_TOOLS: "18", AUTO_ROUTER_VERBOSE: "true" }, { easyTarget: " ", hardTarget: null, hardThreshold: -1, longContextChars: "bad", largeToolResultChars: 0, manyTools: 1.5, verbose: "invalid" });
-  assert.deepEqual(config, { easyTarget: "env-easy", hardTarget: "env-hard", hardThreshold: 8, longContextChars: 28000, largeToolResultChars: 14000, verbose: true, method: "local", jev: { decisionModel: null, timeoutMs: router.DEFAULTS.jevTimeoutMs } });
+  assert.deepEqual(config, { easyTarget: "env-easy", hardTarget: "env-hard", hardThreshold: 8, longContextChars: 28000, largeToolResultChars: 14000, verbose: true, method: "local", jev: { decisionModel: null, decisionModels: [], timeoutMs: router.DEFAULTS.jevTimeoutMs } });
   assert.ok(!Object.hasOwn(config, "manyTools"));
 });
 
@@ -532,25 +532,26 @@ test("cloned delegation cannot bypass static Auto Router protection", async () =
 });
 
 
-test("model order is the Auto Router target source", () => {
+test("Local routing resolves every ordered model tier while retaining two-tier thresholds", () => {
   const easy = message("hello"), hard = message("fully audit this");
+  assert.equal(selectConfiguredRoute(easy, "auto", { models: ["only"] }).target, "only");
   assert.equal(selectConfiguredRoute(easy, "auto", { models: ["easy", "hard"] }).target, "easy");
-  assert.equal(selectConfiguredRoute(hard, "auto", { models: ["easy", "hard", "ignored"] }).target, "hard");
-  assert.equal(selectConfiguredRoute(easy, "auto", { models: ["hard", "easy", "ignored"] }).target, "hard");
-  assert.equal(selectConfiguredRoute(hard, "auto", { models: ["replacement", "hard"] }).target, "hard");
-  assert.equal(selectConfiguredRoute(easy, "auto", { models: ["replacement", "hard"] }).target, "replacement");
-  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: [] }), /requires two distinct usable models/);
-  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: ["only"] }), /requires two distinct usable models/);
-  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: ["same", "same"] }), /requires two distinct usable models/);
+  assert.equal(selectConfiguredRoute(hard, "auto", { models: ["easy", "hard"] }).target, "hard");
+  assert.equal(selectConfiguredRoute(hard, "auto", { models: ["easy", "middle", "strong"] }).target, "middle");
+  assert.equal(selectConfiguredRoute(message("Fully audit this repository concurrency race condition."), "auto", { models: ["one", "two", "three", "four", "five"] }).target, "three");
+  assert.equal(selectConfiguredRoute(message("Fully audit this repository concurrency race condition."), "auto", { models: ["one", "two", "three", "four", "five"], comboStrategies: { auto: { autoRouter: { hardThreshold: 3 } } } }).target, "five");
+  assert.deepEqual([0, 0, 1, 2, 4], [0, 5, 6, 12, 1000].map((escalationScore) => router.selectLocalRank({ escalationScore, candidateCount: 5, hardThreshold: 6 })));
+  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: [] }), /one or more distinct usable ordered models/);
+  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: ["same", "same"] }), /one or more distinct usable ordered models/);
 });
 test("legacy target configuration remains effective until UI normalization", () => {
   const persisted = { auto: { fallbackStrategy: "auto", autoRouter: { easyTarget: "legacy-easy", hardTarget: "legacy-hard", hardThreshold: 1 } } };
   const legacy = selectConfiguredRoute(message("fully audit this"), "auto", { models: ["new-easy", "new-hard"], comboStrategies: persisted });
   assert.equal(legacy.target, "legacy-hard"); assert.equal(legacy.config.easyTarget, "legacy-easy");
   const normalized = selectConfiguredRoute(message("fully audit this"), "auto", { models: ["legacy-easy", "legacy-hard", "new-easy", "new-hard"], comboStrategies: { auto: { fallbackStrategy: "auto", autoRouter: { hardThreshold: 1 } } } });
-  assert.equal(normalized.target, "legacy-hard"); assert.equal(normalized.config.easyTarget, "legacy-easy");
+  assert.equal(normalized.target, "new-hard"); assert.equal(normalized.config.easyTarget, "legacy-easy");
 });
-test("missing ordered models return a controlled runtime configuration error", async () => { const response = await router.routeAutoCombo({ body: message("hello"), comboName: "auto", comboStrategies: {}, models: ["only"], log: { info() {}, warn() {} }, delegate: () => new Response("unexpected") }); assert.equal(response.status, 400); assert.match((await response.json()).error.message, /requires two distinct usable models/); });
+test("missing ordered models return a controlled runtime configuration error", async () => { const response = await router.routeAutoCombo({ body: message("hello"), comboName: "auto", comboStrategies: {}, models: [], log: { info() {}, warn() {} }, delegate: () => new Response("unexpected") }); assert.equal(response.status, 400); assert.match((await response.json()).error.message, /one or more distinct usable ordered models/); });
 
 test("Jev sends a native System One choice request and delegates its validated selection", async () => {
   const delegated = [], requests = [];
@@ -592,6 +593,16 @@ test("Jev failures safely fall back to the unchanged local classifier", async ()
   }
 });
 
+test("Jev migrates legacy primary configuration and rejects invalid fallback configuration", async () => {
+  assert.deepEqual(router.getConfig({}, { method: "jev", jev: { decisionModel: "primary" } }).jev.decisionModels, ["primary"]);
+  assert.deepEqual(router.getConfig({}, { method: "jev", jev: { decisionModels: ["primary", "fallback"] } }).jev.decisionModels, ["primary", "fallback"]);
+  const base = { body: message("Rename one label."), comboName: "auto", models: ["cheap", "strong"], log: { info() {}, warn() {} }, decide: async () => ({ answers: { candidate: { type: "choice", choice: "candidate_1" } } }), delegate: () => new Response("unexpected") };
+  for (const jev of [{ decisionModels: ["primary", "fallback", "third"] }, { decisionModels: ["primary", ""] }, { decisionModels: ["primary", "primary"] }]) {
+    const response = await router.routeAutoCombo({ ...base, comboStrategies: { auto: { autoRouter: { method: "jev", jev } } } });
+    assert.equal(response.status, 400);
+  }
+});
+
 test("Jev timeout aborts the local decision and releases pending selection state", async () => {
   const timers = { scheduled: [], cleared: [], setTimeout(callback) { this.scheduled.push(callback); return this.scheduled.length; }, clearTimeout(id) { this.cleared.push(id); } };
   let completedSignal;
@@ -608,7 +619,7 @@ test("Jev timeout aborts the local decision and releases pending selection state
 
   let aborted = false, calls = 0;
   const timedOut = router.routeAutoCombo({
-    body: stickyBody("hello", "timeout-releases-pending"), comboName: "auto", models: ["easy", "hard"], clientIdentity: "Bearer timeout-client",
+    body: routeBody("hello", "timeout-releases-pending"), comboName: "auto", models: ["easy", "hard"], clientIdentity: "Bearer timeout-client",
     comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge", timeoutMs: 100 } } } },
     log: { info() {}, warn() {} },
     decide: (_request, _model, signal) => ({ json: () => new Promise((_, reject) => signal.addEventListener("abort", () => { aborted = true; reject(Object.assign(new Error("aborted"), { name: "AbortError" })); }, { once: true })) }),
@@ -618,7 +629,7 @@ test("Jev timeout aborts the local decision and releases pending selection state
   assert.equal(await (await timedOut).text(), "easy");
   assert.equal(aborted, true);
   const later = await router.routeAutoCombo({
-    body: stickyBody("hello", "timeout-releases-pending"), comboName: "auto", models: ["new-easy", "new-hard"], clientIdentity: "Bearer timeout-client",
+    body: routeBody("hello", "timeout-releases-pending"), comboName: "auto", models: ["new-easy", "new-hard"], clientIdentity: "Bearer timeout-client",
     comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } },
     log: { info() {}, warn() {} },
     decide: async () => ({ answers: { candidate: { type: "choice", choice: ++calls === 1 ? "candidate_2" : "candidate_1" } } }),
@@ -629,7 +640,7 @@ test("Jev timeout aborts the local decision and releases pending selection state
 });
 
 test("Jev validates candidate pools and sanitizes bounded native System One requests", () => {
-  assert.throws(() => router.jevCandidates(["a"]), /at least two/);
+  assert.deepEqual(router.jevCandidates(["a"]), ["a"]);
   assert.throws(() => router.jevCandidates(["a", "a"]), /distinct/);
   assert.throws(() => router.jevCandidates(Array.from({ length: 256 }, (_, index) => `model-${index}`)), /at most 255/);
   const request = router.jevRequest({ messages: [{ role: "system", content: "secret-system" }, { role: "user", content: "x".repeat(6000) }], tools: [{ function: { name: "secret-tool", description: "x".repeat(50000) } }] }, ["cheap", "strong"]);
@@ -675,8 +686,8 @@ test("Jev failure maps hard local classification to the strongest candidate", as
     delegate: async (_body, target) => { calls.push(target); return "delegated"; },
   });
   assert.equal(response, "delegated");
-  assert.deepEqual(calls, ["premium"]);
-  assert.match(logs.at(-1), /method=jev selected=premium source=local-fallback reason=decision-error/);
+  assert.deepEqual(calls, ["standard"]);
+  assert.match(logs.at(-1), /method=jev selected=standard rank=2\/3 source=local-fallback reason=decision-error/);
 });
 
 
@@ -701,203 +712,179 @@ test("Jev fallback logs sanitized network, HTTP, and invalid-response failure st
   }
 });
 
-test("Jev rejects self-referencing and Auto Router candidates", async () => {
-  const base = { body: message("hello"), comboName: "auto", log: { info() {}, warn() {} }, decide: async () => ({ answers: { candidate: { choice: "candidate_1" } } }), delegate: () => new Response("unexpected") };
-  const self = await router.routeAutoCombo({ ...base, models: ["auto", "ordinary"], comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } } });
-  assert.equal(self.status, 400);
-  const chained = await router.routeAutoCombo({ ...base, models: ["next-auto", "ordinary"], comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } }, "next-auto": { fallbackStrategy: "auto" } } });
-  assert.equal(chained.status, 400);
+
+test("Jev decision models form an optional ordered fallback chain", async () => {
+  const calls = [], logs = [];
+  const base = {
+    body: message("Rename one label."), comboName: "auto", models: ["cheap", "strong"],
+    comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModels: ["primary", "fallback"] } } } },
+    log: { info: (...entry) => logs.push(entry.join(" ")), warn: (...entry) => logs.push(entry.join(" ")) },
+    delegate: (_body, target) => new Response(target),
+  };
+  const fallback = await router.routeAutoCombo({ ...base, decide: async (_request, model) => { calls.push(model); if (model === "primary") throw new Error("quota"); return { answers: { candidate: { type: "choice", choice: "candidate_2" } } }; } });
+  assert.equal(await fallback.text(), "strong");
+  assert.deepEqual(calls, ["primary", "fallback"]);
+  assert.ok(logs.some((line) => line.includes("decision_model=primary") && line.includes("decision_failure")));
+  assert.ok(logs.some((line) => line.includes("decision_model=fallback") && line.includes("rank=2/2")));
+
+  calls.length = 0;
+  const primary = await router.routeAutoCombo({ ...base, body: message("Rename another label."), decide: async (_request, model) => { calls.push(model); return { answers: { candidate: { type: "choice", choice: "candidate_1" } } }; } });
+  assert.equal(await primary.text(), "cheap");
+  assert.deepEqual(calls, ["primary"]);
+
+  const local = await router.routeAutoCombo({ ...base, body: message("Fully audit this repository concurrency race condition."), comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModels: ["primary"] } } } }, decide: async () => { throw new Error("unavailable"); } });
+  assert.equal(await local.text(), "strong");
+});
+
+test("Jev fallback shares a single decision deadline", async () => {
+  const calls = [];
+  const started = Date.now();
+  const response = await router.routeAutoCombo({
+    body: message("Rename one label."), comboName: "auto", models: ["cheap", "strong"],
+    comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModels: ["primary", "fallback"], timeoutMs: 100 } } } },
+    log: { info() {}, warn() {} },
+    decide: async (_request, model) => {
+      calls.push(model);
+      if (model === "primary") { await new Promise((resolve) => setTimeout(resolve, 60)); throw new Error("provider error"); }
+      return { answers: { candidate: { type: "choice", choice: "candidate_2" } } };
+    }, delegate: (_body, target) => new Response(target),
+  });
+  assert.equal(await response.text(), "strong");
+  assert.deepEqual(calls, ["primary", "fallback"]);
+  assert.ok(Date.now() - started < 100, "fallback did not receive a fresh timeout budget");
+});
+
+test("Jev routing decisions can downgrade on later turns in one conversation", async () => {
+  const choices = ["candidate_4", "candidate_1"];
+  const decide = async () => ({ answers: { candidate: { type: "choice", choice: choices.shift() } } });
+  const first = await jevRoute({ body: routeBody("Fully audit this repository concurrency race condition.", "downgrade"), decide });
+  const second = await jevRoute({ body: routeBody("Rename one label.", "downgrade"), decide });
+  assert.deepEqual([await first.text(), await second.text()], ["premium", "cheap"]);
+});
+
+test("Jev routing decisions can upgrade on later turns in one conversation", async () => {
+  const choices = ["candidate_1", "candidate_4"];
+  const decide = async () => ({ answers: { candidate: { type: "choice", choice: choices.shift() } } });
+  const first = await jevRoute({ body: routeBody("Rename one label.", "upgrade"), decide });
+  const second = await jevRoute({ body: routeBody("Fully audit this repository concurrency race condition.", "upgrade"), decide });
+  assert.deepEqual([await first.text(), await second.text()], ["cheap", "premium"]);
+});
+
+test("Jev makes an independent decision for every completed turn", async () => {
+  const choices = ["candidate_3", "candidate_1", "candidate_2"], requests = [];
+  const decide = async (request) => { requests.push(request); return { answers: { candidate: { type: "choice", choice: choices.shift() } } }; };
+  const results = [];
+  for (const content of ["Repair this regression.", "Rename one label.", "Add a unit test."]) results.push(await (await jevRoute({ body: routeBody(content, "independent-turns"), decide })).text());
+  assert.deepEqual(results, ["coder-high", "cheap", "coder"]);
+  assert.equal(requests.length, 3);
+});
+
+test("Jev routes one conversation independently across high, low, medium, and high turns", async () => {
+  const conversation = "stateless-four-turns", choices = ["candidate_4", "candidate_1", "candidate_2", "candidate_4"], requests = [];
+  const decide = async (request) => { requests.push(request); return { answers: { candidate: { type: "choice", choice: choices.shift() } } }; };
+  const results = [];
+  for (const content of ["Fully audit this repository concurrency race condition.", "Rename one label.", "please review the change", "Fully audit this repository concurrency race condition."]) {
+    results.push(await (await jevRoute({ body: routeBody(content, conversation), decide, clientIdentity: "Bearer stateless-client", conversationHeaders: { "x-9router-conversation-id": conversation } })).text());
+  }
+  assert.deepEqual(results, ["premium", "cheap", "coder", "premium"]);
+  assert.equal(requests.length, 4, "every completed turn must issue its own Jev decision");
+});
+
+test("Local routing routes one conversation independently across high, low, medium, and high turns", async () => {
+  const conversation = "stateless-local-four-turns", models = ["cheap", "coder", "coder-high", "premium"];
+  const invoke = (content) => router.routeAutoCombo({ body: routeBody(content, conversation), comboName: "auto", models, comboStrategies: { auto: { autoRouter: { method: "local" } } }, clientIdentity: "Bearer stateless-client", conversationHeaders: { "x-9router-conversation-id": conversation }, log: { info() {}, warn() {} }, delegate: (_body, target) => new Response(target) });
+  const results = [];
+  for (const content of ["Fully audit this repository concurrency race condition.", "Rename one label.", "please review the change", "Fully audit this repository concurrency race condition."]) {
+    results.push(await (await invoke(content)).text());
+  }
+  assert.deepEqual(results, ["coder-high", "cheap", "coder", "coder-high"]);
+});
+
+test("Jev failure falls back to the current request local tier", async () => {
+  const config = { auto: { autoRouter: { method: "jev", jev: { decisionModels: ["judge"] } } } }, models = ["cheap", "coder", "coder-high", "premium"];
+  const invoke = (content, decide) => router.routeAutoCombo({ body: routeBody(content, "fallback-current"), comboName: "auto", models, comboStrategies: config, clientIdentity: "Bearer test-client", log: { info() {}, warn() {} }, decide, delegate: (_body, target) => new Response(target) });
+  const high = await invoke("Fully audit this repository concurrency race condition.", async () => ({ answers: { candidate: { type: "choice", choice: "candidate_4" } } }));
+  const low = await invoke("Rename one label.", async () => { throw new Error("provider down"); });
+  assert.deepEqual([await high.text(), await low.text()], ["premium", "cheap"]);
+});
+
+test("Jev local fallback ranks ordered models instead of dormant legacy targets", async () => {
+  const models = ["cheap", "coder", "coder-high", "premium"];
+  const comboStrategies = { auto: { autoRouter: { method: "jev", easyTarget: "stale-easy", hardTarget: "stale-hard", jev: { decisionModels: ["judge"] } } } };
+  const invoke = (content) => router.routeAutoCombo({ body: routeBody(content, "legacy-jev-fallback"), comboName: "auto", models, comboStrategies, clientIdentity: "Bearer test-client", log: { info() {}, warn() {} }, decide: async () => { throw new Error("provider down"); }, delegate: (_body, target) => new Response(target) });
+  assert.deepEqual([await (await invoke("Rename one label.")).text(), await (await invoke("Fully audit this repository concurrency race condition.")).text()], ["cheap", "coder-high"]);
+  assert.equal(router.selectRoute(message("Rename one label."), "auto", { models, comboStrategies }).target, "stale-easy", "Local classification still honors legacy targets");
+});
+
+test("Local routing classifies each turn independently without a tier floor", async () => {
+  const config = { auto: { autoRouter: { method: "local" } } }, models = ["cheap", "coder", "coder-high", "premium"];
+  const invoke = (content) => router.routeAutoCombo({ body: routeBody(content, "local-turns"), comboName: "auto", models, comboStrategies: config, log: { info() {}, warn() {} }, delegate: (_body, target) => new Response(target) });
+  const high = await invoke("Fully audit this repository concurrency race condition."), low = await invoke("Rename one label.");
+  assert.deepEqual([await high.text(), await low.text()], ["coder-high", "cheap"]);
 });
 
 const jevStrategy = { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } };
-const stickyBody = (content, conversationId = "conversation") => ({ ...message(content), conversation_id: conversationId });
-async function stickyRoute({ body, decide, models = ["cheap", "coder", "coder-high", "premium"], clientIdentity = "Bearer test-client", conversationHeaders, now = 0, logs = [] }) {
-  return router.routeAutoCombo({
-    body, comboName: "auto", models, comboStrategies: jevStrategy, clientIdentity, conversationHeaders, now,
-    log: { info: (...entry) => logs.push(entry.join(" ")), warn() {} }, decide,
-    delegate: (_body, target) => new Response(target),
-  });
+const routeBody = (content, conversationId = "conversation") => ({ ...message(content), conversation_id: conversationId });
+async function jevRoute({ body, decide, models = ["cheap", "coder", "coder-high", "premium"], clientIdentity = "Bearer test-client", conversationHeaders, comboStrategies = jevStrategy, logs = [] }) {
+  return router.routeAutoCombo({ body, comboName: "auto", models, comboStrategies, clientIdentity, conversationHeaders, log: { info: (...entry) => logs.push(entry.join(" ")), warn() {} }, decide, delegate: (_body, target) => new Response(target) });
 }
 
-test("conversation identity resolver uses canonical and generic header precedence case-insensitively", () => {
-  const body = { conversation_id: "body-value", conversation: { id: "nested-value" }, metadata: { session_id: "metadata-value" } };
-  assert.equal(router.resolveConversationIdentity({ body, headers: { "X-9Router-Conversation-ID": "canonical-header", "x-conversation-id": "generic-header" } }), "canonical-header");
-  assert.equal(router.resolveConversationIdentity({ body, headers: { "x-9router-conversation-id": "canonical-lower" } }), "canonical-lower");
-  assert.equal(router.resolveConversationIdentity({ body, headers: { "X-Conversation-ID": "generic-header" } }), "generic-header");
-  assert.equal(router.resolveConversationIdentity({ body: { sessionId: "session" }, headers: { "x-session-id": "header-session" } }), "header-session");
-  assert.equal(router.resolveConversationIdentity({ body: { threadId: "thread" }, headers: { "X-Thread-ID": "header-thread" } }), "header-thread");
+test("conversation identity resolver retains canonical precedence", () => {
+  const body = { conversation_id: "body-value", conversation: { id: "nested-value" } };
+  assert.equal(router.resolveConversationIdentity({ body, headers: { "x-9router-conversation-id": "canonical" } }), "canonical");
+  assert.equal(router.resolveConversationIdentity({ body }), "body-value");
 });
 
-test("conversation identity resolver supports generic body forms without deriving identity", () => {
-  for (const [body, expected] of [
-    [{ conversation_id: "conversation-snake" }, "conversation-snake"], [{ conversationId: "conversation-camel" }, "conversation-camel"],
-    [{ session_id: "session-snake" }, "session-snake"], [{ sessionId: "session-camel" }, "session-camel"],
-    [{ thread_id: "thread-snake" }, "thread-snake"], [{ threadId: "thread-camel" }, "thread-camel"],
-    [{ conversation: { id: "nested-conversation" } }, "nested-conversation"], [{ session: { id: "nested-session" } }, "nested-session"], [{ thread: { id: "nested-thread" } }, "nested-thread"],
-    [{ metadata: { conversation_id: "metadata-conversation" } }, "metadata-conversation"], [{ metadata: { sessionId: "metadata-session" } }, "metadata-session"], [{ metadata: { thread_id: "metadata-thread" } }, "metadata-thread"],
-  ]) assert.equal(router.resolveConversationIdentity({ body }), expected);
-  assert.equal(router.resolveConversationIdentity({ body: { messages: [{ role: "user", content: "do not derive identity" }] } }), null);
+test("pending keys hash client and conversation identities without retaining a route", () => {
+  const body = routeBody("Rename one label.", "conversation-secret");
+  const same = router.pendingKey("auto", body, "Bearer client-secret");
+  assert.equal(same, router.pendingKey("auto", body, "Bearer client-secret"));
+  assert.notEqual(same, router.pendingKey("auto", routeBody("Rename one label.", "other-conversation"), "Bearer client-secret"));
+  assert.notEqual(same, router.pendingKey("auto", body, "Bearer other-client"));
+  assert.ok(!same.includes("conversation-secret"));
+  assert.ok(!same.includes("Bearer client-secret"));
 });
 
-test("Jev header identity isolates conversation API key and combo sticky state", async () => {
-  const choices = ["candidate_2", "candidate_4", "candidate_3", "candidate_1"];
-  let decisions = 0;
-  const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: choices.shift() } } }; };
-  const route = (conversationHeaders, clientIdentity = "Bearer key-A", comboName = "auto") => router.routeAutoCombo({
-    body: message("Rename one label."), comboName, models: ["cheap", "coder", "coder-high", "premium"],
-    comboStrategies: { [comboName]: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } },
-    clientIdentity, conversationHeaders, now: 50, log: { info() {}, warn() {} }, decide,
-    delegate: (_body, target) => new Response(target),
-  });
-  assert.deepEqual(await Promise.all([(await route({ "X-9Router-Conversation-ID": "same" })).text(), (await route({ "x-9router-conversation-id": "same" })).text(), (await route({ "X-9Router-Conversation-ID": "different" })).text(), (await route({ "X-9Router-Conversation-ID": "same" }, "Bearer key-B")).text(), (await route({ "X-9Router-Conversation-ID": "same" }, "Bearer key-A", "other")).text()]), ["coder", "coder", "premium", "coder-high", "cheap"]);
-  assert.equal(decisions, 4);
-});
-
-test("Jev canonical header wins over conflicting body identity", async () => {
-  let decisions = 0;
-  const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: "candidate_2" } } }; };
-  await stickyRoute({ body: stickyBody("Rename one label.", "body-value"), conversationHeaders: { "X-9Router-Conversation-ID": "canonical-value" }, decide, now: 60 });
-  await stickyRoute({ body: stickyBody("Rename another label.", "different-body"), conversationHeaders: { "x-9router-conversation-id": "canonical-value" }, decide, now: 61 });
-  assert.equal(decisions, 1);
-});
-
-test("Jev stores an initial selection and reuses it for same-conversation follow-ups", async () => {
-  let decisions = 0;
-  const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: "candidate_2" } } }; };
-  const first = await stickyRoute({ body: stickyBody("Rename one label.", "sticky-reuse"), decide, now: 100 });
-  const second = await stickyRoute({ body: stickyBody("Make the label blue.", "sticky-reuse"), decide, now: 101 });
-  const third = await stickyRoute({ body: stickyBody("Update its tooltip.", "sticky-reuse"), decide, now: 102 });
-  assert.deepEqual([await first.text(), await second.text(), await third.text()], ["coder", "coder", "coder"]);
-  assert.equal(decisions, 1);
-});
-
-test("Jev sticky state is isolated by explicit conversation identity", async () => {
-  const choices = ["candidate_2", "candidate_4"];
-  const decide = async () => ({ answers: { candidate: { type: "choice", choice: choices.shift() } } });
-  const a1 = await stickyRoute({ body: stickyBody("Rename one label.", "isolation-a"), decide, now: 200 });
-  const b1 = await stickyRoute({ body: stickyBody("Rename one label.", "isolation-b"), decide, now: 201 });
-  const a2 = await stickyRoute({ body: stickyBody("Adjust its label.", "isolation-a"), decide, now: 202 });
-  const b2 = await stickyRoute({ body: stickyBody("Adjust its label.", "isolation-b"), decide, now: 203 });
-  assert.deepEqual([await a1.text(), await b1.text(), await a2.text(), await b2.text()], ["coder", "premium", "coder", "premium"]);
-  assert.equal(choices.length, 0);
-});
-
-test("Jev upgrades only from the current tier and never downgrades", async () => {
-  const requests = [], logs = [];
-  const decide = async (request) => {
-    requests.push(request);
-    return { answers: { candidate: { type: "choice", choice: requests.length === 1 ? "candidate_2" : "candidate_3" } } };
-  };
-  const initial = await stickyRoute({ body: stickyBody("Rename one label.", "upgrade"), decide, now: 300, logs });
-  const upgrade = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "upgrade"), decide, now: 301, logs });
-  const easy = await stickyRoute({ body: stickyBody("Rename another label.", "upgrade"), decide, now: 302, logs });
-  assert.deepEqual([await initial.text(), await upgrade.text(), await easy.text()], ["coder", "coder-high", "coder-high"]);
-  assert.equal(requests.length, 2);
-  assert.deepEqual(Object.keys(requests[1].questions.candidate.criteria), ["candidate_2", "candidate_3", "candidate_4"]);
-  assert.ok(logs.some((line) => line.includes("source=jev-upgrade previous_rank=2")));
-});
-
-test("Jev does not re-decide after reaching the strongest tier or equivalent hard score", async () => {
-  let decisions = 0;
-  const decide = async () => {
-    decisions += 1;
-    return { answers: { candidate: { type: "choice", choice: decisions === 1 ? "candidate_3" : "candidate_4" } } };
-  };
-  await stickyRoute({ body: stickyBody("Rename one label.", "strongest"), decide, now: 400 });
-  const firstHard = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "strongest"), decide, now: 401 });
-  const secondHard = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "strongest"), decide, now: 402 });
-  assert.equal(await firstHard.text(), "premium");
-  assert.equal(await secondHard.text(), "premium");
-  assert.equal(decisions, 2);
-});
-
-test("Jev initial and upgrade failures preserve safe sticky routes", async () => {
-  let initialCalls = 0;
-  const fallback = async () => { initialCalls += 1; throw new Error("provider down"); };
-  const hard = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "initial-failure"), decide: fallback, now: 500 });
-  const repeat = await stickyRoute({ body: stickyBody("Rename one label.", "initial-failure"), decide: fallback, now: 501 });
-  assert.equal(await hard.text(), "premium");
-  assert.equal(await repeat.text(), "premium");
-  assert.equal(initialCalls, 1);
-
-  let calls = 0; const logs = [];
-  const upgradeFailure = async () => {
-    calls += 1;
-    if (calls === 1) return { answers: { candidate: { type: "choice", choice: "candidate_2" } } };
-    throw new Error("provider down");
-  };
-  await stickyRoute({ body: stickyBody("Rename one label.", "upgrade-failure"), decide: upgradeFailure, now: 510, logs });
-  const retained = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "upgrade-failure"), decide: upgradeFailure, now: 511, logs });
-  assert.equal(await retained.text(), "coder");
-  assert.ok(logs.some((line) => line.includes("source=sticky reason=upgrade-decision-error")));
-});
-
-test("Jev sticky entries expire and invalidate on candidate configuration changes", async () => {
-  let calls = 0;
-  const decide = async () => ({ answers: { candidate: { type: "choice", choice: calls++ === 0 ? "candidate_2" : "candidate_1" } } });
-  await stickyRoute({ body: stickyBody("Rename one label.", "expiry"), decide, now: 600 });
-  const expired = await stickyRoute({ body: stickyBody("Rename one label.", "expiry"), decide, now: 600 + 30 * 60 * 1000 + 1 });
-  assert.equal(await expired.text(), "cheap");
-  await stickyRoute({ body: stickyBody("Rename one label.", "mutation"), decide, now: 700 });
-  const reordered = await stickyRoute({ body: stickyBody("Rename one label.", "mutation"), decide, models: ["coder", "cheap", "coder-high", "premium"], now: 701 });
-  assert.equal(await reordered.text(), "coder");
-  assert.equal(calls, 4);
-});
-
-test("Jev sticky cache refreshes LRU recency on valid reuse", async () => {
-  const epoch = 2_000_000;
-  let decisions = 0;
-  const decide = async () => {
-    decisions += 1;
-    return { answers: { candidate: { type: "choice", choice: decisions === 1 ? "candidate_1" : decisions === 2 ? "candidate_2" : decisions === 2049 ? "candidate_3" : decisions === 2050 ? "candidate_4" : "candidate_1" } } };
-  };
-  const route = (conversation, now) => stickyRoute({ body: stickyBody("Rename one label.", conversation), decide, now });
-  assert.equal(await (await route("lru-a", epoch)).text(), "cheap");
-  assert.equal(await (await route("lru-b", epoch + 1)).text(), "coder");
-  assert.equal(await (await route("lru-a", epoch + 2)).text(), "cheap");
-  for (let index = 0; index < 2046; index += 1) await route(`lru-fill-${index}`, epoch + index + 3);
-  assert.equal(await (await route("lru-c", epoch + 2049)).text(), "coder-high");
-  assert.equal(await (await route("lru-a", epoch + 2050)).text(), "cheap");
-  assert.equal(await (await route("lru-b", epoch + 2051)).text(), "premium");
-  assert.equal(decisions, 2050);
-});
-
-test("Jev pending initial decisions do not cross candidate configuration changes", async () => {
-  const decisions = [], oldModels = ["old-cheap", "old-coder", "old-premium"], newModels = ["new-cheap", "new-coder", "new-premium"];
-  let resolveOld, resolveNew;
-  const decide = () => new Promise((resolve) => { decisions.push(resolve); });
-  const oldRequest = stickyRoute({ body: stickyBody("Rename one label.", "pending-initial-mutation"), decide, models: oldModels, now: 750 });
-  await Promise.resolve();
-  const newRequest = stickyRoute({ body: stickyBody("Rename one label.", "pending-initial-mutation"), decide, models: newModels, now: 751 });
-  await Promise.resolve();
-  [resolveOld, resolveNew] = decisions;
-  assert.equal(decisions.length, 2);
-  resolveNew({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
-  resolveOld({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
-  assert.deepEqual([await (await oldRequest).text(), await (await newRequest).text()], ["old-coder", "new-coder"]);
-  const followUp = await stickyRoute({ body: stickyBody("Rename another label.", "pending-initial-mutation"), decide, models: newModels, now: 752 });
-  assert.equal(await followUp.text(), "new-coder");
-  assert.equal(decisions.length, 2);
-});
-
-test("Jev coalesces concurrent equivalent initial decisions", async () => {
+test("Jev coalesces concurrent equivalent requests", async () => {
   const decisions = [];
   const decide = () => new Promise((resolve) => { decisions.push(resolve); });
-  const first = stickyRoute({ body: stickyBody("Rename one label.", "concurrent-equivalent"), decide, now: 750 });
+  const first = jevRoute({ body: routeBody("Rename one label.", "coalesced"), decide });
   await Promise.resolve();
-  const second = stickyRoute({ body: stickyBody("Rename one label.", "concurrent-equivalent"), decide, now: 751 });
+  const second = jevRoute({ body: routeBody("Rename one label.", "coalesced"), decide });
   await Promise.resolve();
   assert.equal(decisions.length, 1);
   decisions[0]({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
   assert.deepEqual([await (await first).text(), await (await second).text()], ["coder", "coder"]);
 });
 
-test("Jev only coalesces concurrent decisions with equivalent request context", async () => {
+test("Jev pending coalescing clears after completion so sequential turns decide again", async () => {
+  const requests = [];
+  const decide = async (request) => { requests.push(request); return { answers: { candidate: { type: "choice", choice: requests.length === 1 ? "candidate_2" : "candidate_4" } } }; };
+  const first = await jevRoute({ body: routeBody("Rename one label.", "pending-eviction"), decide });
+  const second = await jevRoute({ body: routeBody("Rename one label.", "pending-eviction"), decide });
+  assert.deepEqual([await first.text(), await second.text()], ["coder", "premium"]);
+  assert.equal(requests.length, 2, "a completed pending entry must not be reused");
+});
+
+test("pending Jev decisions do not cross Jev decision-model chains", async () => {
+  const decisions = [], primary = { auto: { autoRouter: { method: "jev", jev: { decisionModels: ["judge-a"] } } } }, alternate = { auto: { autoRouter: { method: "jev", jev: { decisionModels: ["judge-b"] } } } };
+  const decide = () => new Promise((resolve) => { decisions.push(resolve); });
+  const first = jevRoute({ body: routeBody("Rename one label.", "decision-chain"), decide, comboStrategies: primary });
+  await Promise.resolve();
+  const second = jevRoute({ body: routeBody("Rename one label.", "decision-chain"), decide, comboStrategies: alternate });
+  await Promise.resolve();
+  assert.equal(decisions.length, 2, "a different decision-model chain must not share a pending decision");
+  decisions[0]({ answers: { candidate: { type: "choice", choice: "candidate_1" } } });
+  decisions[1]({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  assert.deepEqual([await (await first).text(), await (await second).text()], ["cheap", "coder"]);
+});
+
+test("Jev keeps different concurrent requests in one conversation isolated", async () => {
   const decisions = [];
   const decide = () => new Promise((resolve) => { decisions.push(resolve); });
-  const easy = stickyRoute({ body: stickyBody("Rename one label.", "concurrent-distinct"), decide, now: 755 });
+  const easy = jevRoute({ body: routeBody("Rename one label.", "distinct"), decide });
   await Promise.resolve();
-  const hard = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "concurrent-distinct"), decide, now: 756 });
+  const hard = jevRoute({ body: routeBody("Fully audit this repository concurrency race condition.", "distinct"), decide });
   await Promise.resolve();
   assert.equal(decisions.length, 2);
   decisions[0]({ answers: { candidate: { type: "choice", choice: "candidate_1" } } });
@@ -905,92 +892,80 @@ test("Jev only coalesces concurrent decisions with equivalent request context", 
   assert.deepEqual([await (await easy).text(), await (await hard).text()], ["cheap", "premium"]);
 });
 
-test("Jev coalesces concurrent successful upgrades", async () => {
-  let decisions = 0, resolveUpgrade;
-  const decide = () => {
-    decisions += 1;
-    return decisions === 1 ? { answers: { candidate: { type: "choice", choice: "candidate_2" } } } : new Promise((resolve) => { resolveUpgrade = resolve; });
-  };
-  await stickyRoute({ body: stickyBody("Rename one label.", "concurrent-upgrade-success"), decide, now: 760 });
-  const first = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "concurrent-upgrade-success"), decide, now: 761 });
-  await Promise.resolve();
-  const second = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "concurrent-upgrade-success"), decide, now: 762 });
-  await Promise.resolve();
-  assert.equal(decisions, 2);
-  resolveUpgrade({ answers: { candidate: { type: "choice", choice: "candidate_3" } } });
-  assert.deepEqual([await (await first).text(), await (await second).text()], ["coder-high", "coder-high"]);
-  const easy = await stickyRoute({ body: stickyBody("Rename another label.", "concurrent-upgrade-success"), decide, now: 763 });
-  assert.equal(await easy.text(), "coder-high");
-  assert.equal(decisions, 2);
-});
-
-test("Jev coalesces concurrent failed upgrades", async () => {
-  let decisions = 0, rejectUpgrade;
-  const decide = () => {
-    decisions += 1;
-    return decisions === 1 ? { answers: { candidate: { type: "choice", choice: "candidate_2" } } } : new Promise((_, reject) => { rejectUpgrade = reject; });
-  };
-  await stickyRoute({ body: stickyBody("Rename one label.", "concurrent-upgrade-failure"), decide, now: 770 });
-  const first = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "concurrent-upgrade-failure"), decide, now: 771 });
-  await Promise.resolve();
-  const second = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "concurrent-upgrade-failure"), decide, now: 772 });
-  await Promise.resolve();
-  assert.equal(decisions, 2);
-  rejectUpgrade(new Error("provider down"));
-  assert.deepEqual([await (await first).text(), await (await second).text()], ["coder", "coder"]);
-  const easy = await stickyRoute({ body: stickyBody("Rename another label.", "concurrent-upgrade-failure"), decide, now: 773 });
-  assert.equal(await easy.text(), "coder");
-  assert.equal(decisions, 2);
-});
-
-test("Jev pending upgrades do not cross candidate configuration changes", async () => {
-  const oldModels = ["old-cheap", "old-coder", "old-premium"], newModels = ["new-cheap", "new-coder", "new-premium"];
+test("Jev pending coalescing isolates client and conversation identities", async () => {
   const decisions = [];
   const decide = () => new Promise((resolve) => { decisions.push(resolve); });
-  const initial = stickyRoute({ body: stickyBody("Rename one label.", "pending-upgrade-mutation"), decide, models: oldModels, now: 780 });
+  const same = jevRoute({ body: routeBody("Rename one label.", "shared"), clientIdentity: "Bearer client-a", decide });
   await Promise.resolve();
-  decisions.shift()({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
-  assert.equal(await (await initial).text(), "old-coder");
-  const oldUpgrade = stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "pending-upgrade-mutation"), decide, models: oldModels, now: 781 });
+  const coalesced = jevRoute({ body: routeBody("Rename one label.", "shared"), clientIdentity: "Bearer client-a", decide });
   await Promise.resolve();
-  const newInitial = stickyRoute({ body: stickyBody("Rename one label.", "pending-upgrade-mutation"), decide, models: newModels, now: 782 });
+  const otherConversation = jevRoute({ body: routeBody("Rename one label.", "other"), clientIdentity: "Bearer client-a", decide });
+  await Promise.resolve();
+  const otherClient = jevRoute({ body: routeBody("Rename one label.", "shared"), clientIdentity: "Bearer client-b", decide });
+  await Promise.resolve();
+  assert.equal(decisions.length, 3);
+  for (const resolve of decisions) resolve({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  assert.deepEqual(await Promise.all([same, coalesced, otherConversation, otherClient].map(async (response) => (await response).text())), ["coder", "coder", "coder", "coder"]);
+});
+
+test("pending Jev decisions do not cross candidate configuration changes", async () => {
+  const decisions = [], oldModels = ["old-cheap", "old-coder"], newModels = ["new-cheap", "new-coder"];
+  const decide = () => new Promise((resolve) => { decisions.push(resolve); });
+  const oldRequest = jevRoute({ body: routeBody("Rename one label.", "candidate-change"), decide, models: oldModels });
+  await Promise.resolve();
+  const newRequest = jevRoute({ body: routeBody("Rename one label.", "candidate-change"), decide, models: newModels });
   await Promise.resolve();
   assert.equal(decisions.length, 2);
-  const [resolveOldUpgrade, resolveNewInitial] = decisions;
-  resolveNewInitial({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
-  resolveOldUpgrade({ answers: { candidate: { type: "choice", choice: "candidate_3" } } });
-  assert.deepEqual([await (await oldUpgrade).text(), await (await newInitial).text()], ["old-premium", "new-coder"]);
-  const followUp = await stickyRoute({ body: stickyBody("Rename another label.", "pending-upgrade-mutation"), decide, models: newModels, now: 783 });
-  assert.equal(await followUp.text(), "new-coder");
-  assert.equal(decisions.length, 2);
+  decisions[0]({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  decisions[1]({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  assert.deepEqual([await (await oldRequest).text(), await (await newRequest).text()], ["old-coder", "new-coder"]);
 });
 
-test("Jev does not retain state without a reliable conversation identity", async () => {
-  let calls = 0;
-  const decide = async () => ({ answers: { candidate: { type: "choice", choice: calls++ === 0 ? "candidate_2" : "candidate_3" } } });
-  const first = await stickyRoute({ body: message("Rename one label."), decide, now: 800 });
-  const second = await stickyRoute({ body: message("Rename one label."), decide, now: 801 });
-  assert.deepEqual([await first.text(), await second.text()], ["coder", "coder-high"]);
-  assert.equal(calls, 2);
+test("coalesced failed Jev decisions run Local fallback independently per caller", async () => {
+  const sharedTail = ["context alpha", "context beta", "Rename one label."];
+  const body = (history) => ({
+    conversation_id: "shared-failed-decision",
+    messages: [
+      ...history.map((content) => ({ role: "user", content })),
+      ...sharedTail.map((content) => ({ role: "user", content })),
+      { role: "assistant", content: [{ type: "image_url", image_url: "https://example.invalid/image" }] },
+    ],
+  });
+  const audit = body(["Fully audit project.", "Fully audit project.", "Fully audit project."]);
+  const simple = body(["Simple edit request.", "Simple edit request.", "Simple edit request."]);
+  const config = { auto: { autoRouter: { method: "jev", hardThreshold: 4, jev: { decisionModels: ["judge"] } } } };
+  let reject;
+  const decide = () => new Promise((resolve, rejectDecision) => { reject = rejectDecision; });
+  const first = jevRoute({ body: audit, decide, comboStrategies: config });
+  await Promise.resolve();
+  const second = jevRoute({ body: simple, decide, comboStrategies: config });
+  await Promise.resolve();
+  reject(new Error("provider down"));
+  assert.deepEqual([await (await first).text(), await (await second).text()], ["coder", "cheap"]);
 });
 
-test("Jev recognizes documented wrapped and Responses conversation identifiers", () => {
-  assert.equal(router.stableConversationId({ request: { messages: [], metadata: { conversationId: "wrapped-conversation" } } }), "wrapped-conversation");
-  assert.equal(router.stableConversationId({ input: "continue", session_id: "responses-session" }), "responses-session");
-  assert.equal(router.stableConversationId({ messages: [{ role: "user", content: "x" }], thread: { id: "openhands-thread" } }), "openhands-thread");
-  assert.equal(router.stableConversationId(message("no identity")), null);
+test("Jev coalescing retains an earlier A decision across concurrent B", async () => {
+  const decisions = [];
+  const decide = () => new Promise((resolve) => { decisions.push(resolve); });
+  const firstA = jevRoute({ body: routeBody("Rename one label.", "a-b-a"), decide });
+  await Promise.resolve();
+  const B = jevRoute({ body: routeBody("Fully audit this repository concurrency race condition.", "a-b-a"), decide });
+  await Promise.resolve();
+  const secondA = jevRoute({ body: routeBody("Rename one label.", "a-b-a"), decide });
+  await Promise.resolve();
+  assert.equal(decisions.length, 2, "A2 must share A1 instead of starting a third JEV decision");
+  decisions[0]({ answers: { candidate: { type: "choice", choice: "candidate_2" } } });
+  decisions[1]({ answers: { candidate: { type: "choice", choice: "candidate_4" } } });
+  assert.deepEqual([await (await firstA).text(), await (await B).text(), await (await secondA).text()], ["coder", "premium", "coder"]);
 });
 
-test("OpenHands-style concurrent requests with distinct context each receive a Jev decision", async () => {
-  let decisions = 0;
-  const decide = async () => { decisions += 1; return { answers: { candidate: { type: "choice", choice: "candidate_2" } } }; };
-  const first = harness("Rename one label."); first.conversation_id = "openhands-sticky";
-  const second = harness("Rename another label."); second.conversation_id = "openhands-sticky";
-  const routed = await Promise.all([stickyRoute({ body: first, decide, now: 900 }), stickyRoute({ body: second, decide, now: 901 })]);
-  assert.deepEqual(await Promise.all(routed.map((response) => response.text())), ["coder", "coder"]);
-  assert.equal(decisions, 2);
-});
 
+test("Jev candidate ordering and rank validation remain unchanged", async () => {
+  const request = router.jevRequest(routeBody("Rename one label."), ["cheap", "coder", "premium"]);
+  assert.deepEqual(Object.keys(request.questions.candidate.criteria), ["candidate_1", "candidate_2", "candidate_3"]);
+  const invalid = await jevRoute({ body: routeBody("Rename one label.", "invalid-choice"), decide: async () => ({ answers: { candidate: { type: "choice", choice: "candidate_0" } } }) });
+  assert.equal(await invalid.text(), "cheap");
+});
 
 test("classifier preserves capped public scores while exposing uncapped escalation complexity", () => {
   const lower = classifyTaskComplexity(message("Fully audit this repository concurrency race condition."));
@@ -998,33 +973,4 @@ test("classifier preserves capped public scores while exposing uncapped escalati
   assert.equal(lower.score, router.DEFAULTS.hardThreshold + 1);
   assert.equal(higher.score, router.DEFAULTS.hardThreshold + 1);
   assert.ok(higher.escalationScore > lower.escalationScore);
-});
-
-test("Jev sticky cache keys hash both client and conversation identities", () => {
-  const body = stickyBody("Rename one label.", "conversation-secret");
-  const same = router.stickyKey("auto", body, "Bearer client-secret");
-  assert.equal(same, router.stickyKey("auto", body, "Bearer client-secret"));
-  assert.notEqual(same, router.stickyKey("auto", stickyBody("Rename one label.", "other-conversation"), "Bearer client-secret"));
-  assert.notEqual(same, router.stickyKey("auto", body, "Bearer other-client"));
-  assert.ok(!same.includes("conversation-secret"));
-  assert.ok(!same.includes("Bearer client-secret"));
-});
-
-test("Jev upgrades when a higher uncapped escalation score shares the capped hard score", async () => {
-  const lowerBody = stickyBody("Fully audit this repository concurrency race condition.", "capped-escalation-upgrade");
-  const higherBody = stickyBody("Fully audit this repository concurrency race condition. " + "x".repeat(router.DEFAULTS.longContextChars), "capped-escalation-upgrade");
-  const lower = classifyTaskComplexity(lowerBody), higher = classifyTaskComplexity(higherBody);
-  assert.equal(lower.score, router.DEFAULTS.hardThreshold + 1);
-  assert.equal(higher.score, router.DEFAULTS.hardThreshold + 1);
-  assert.ok(higher.escalationScore > lower.escalationScore, "the old capped-score comparison could not upgrade");
-  const requests = [];
-  const decide = async (request) => {
-    requests.push(request);
-    return { answers: { candidate: { type: "choice", choice: requests.length === 1 ? "candidate_2" : "candidate_3" } } };
-  };
-  const initial = await stickyRoute({ body: lowerBody, decide, now: 275 });
-  const upgraded = await stickyRoute({ body: higherBody, decide, now: 276 });
-  assert.deepEqual([await initial.text(), await upgraded.text()], ["coder", "coder-high"]);
-  assert.equal(requests.length, 2);
-  assert.deepEqual(Object.keys(requests[1].questions.candidate.criteria), ["candidate_2", "candidate_3", "candidate_4"]);
 });

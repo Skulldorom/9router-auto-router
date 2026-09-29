@@ -7,7 +7,7 @@ EXPECTED_UPSTREAM_DIGEST=${3:-${EXPECTED_UPSTREAM_DIGEST:-}}
 EXPECTED_AUTO_ROUTER_VERSION=${4:-${EXPECTED_AUTO_ROUTER_VERSION:-}}
 EXPECTED_UPSTREAM_VERSION=${5:-${EXPECTED_UPSTREAM_VERSION:-}}
 MARKER=9router-auto-router:v3
-UI_MARKER=9router-auto-router-ui:v9
+UI_MARKER=9router-auto-router-ui:v10
 
 fail() {
   echo "Built image verification failed: $*" >&2
@@ -41,7 +41,7 @@ set -eu
 [ -f /opt/auto-router-config.cjs ]
 [ -f /opt/9router-auto-router/auto-router.cjs ]
 [ -f /opt/9router-auto-router/apply-patch.mjs ]
-UI_MARKER=9router-auto-router-ui:v9
+UI_MARKER=9router-auto-router-ui:v10
 runtime_files=$(grep -RFl "9router-auto-router:v3" /app/.next/server 2>/dev/null || true)
 [ "$(printf "%s\n" "$runtime_files" | sed "/^$/d" | wc -l)" -eq 1 ]
 runtime_file=$(printf "%s\n" "$runtime_files" | sed -n "/./{p;q;}")
@@ -52,8 +52,10 @@ for file in $ui_files; do
   [ "$(grep -o "$UI_MARKER" "$file" | wc -l)" -eq 1 ]
   [ "$(grep -o "label:\"Auto Router\"" "$file" | wc -l)" -eq 1 ]
   [ "$(grep -o "autoRouter" "$file" | wc -l)" -ge 2 ]
-  grep -q "Models after position 2 are ignored by Auto Router" "$file"
-  grep -q "Advanced" "$file"
+  grep -q "Ordered models increase in capability from first to last. Local and Jev both select from the complete list." "$file"
+  grep -q "Advanced Settings" "$file"
+  grep -q "Primary Jev model" "$file"
+  grep -q "Fallback Jev model (optional)" "$file"
   ! grep -q "Easy target" "$file"
   ! grep -q "Hard target" "$file"
 done

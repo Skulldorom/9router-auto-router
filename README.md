@@ -29,7 +29,7 @@ OpenHands / Client
 Auto Router selects **one** target combo and delegates the request back to normal 9Router processing. The routing method is configured per Auto Router combo:
 
 - **Local classifier** performs a fast, deterministic local complexity check. It makes no additional model call and sends no prompt externally for classification.
-- **Jev** calls the configured System One decision model with bounded, sanitized decision context. That request incurs the configured provider's applicable usage and cost; Sticky + Upgrade reduces repeated decision calls.
+- **Jev** calls the configured System One decision model with bounded, sanitized decision context. That request incurs the configured provider's applicable usage and cost; concurrent equivalent decisions may share one in-flight call.
 
 Your providers, accounts, quotas, fallback chains, Round Robin configuration, streaming, tools, models, and provider execution remain managed by 9Router.
 
@@ -84,14 +84,14 @@ Open **Edit Combo** and select the routing method.
 For **Local**, arrange the Models list:
 
 ```text
-1  coder        Easy
-2  coder-high   Hard
-3  backup       Ignored
+1  coder-lite   Lowest tier
+2  coder        Intermediate tier
+3  coder-high   Strongest tier
 ```
 
-Local uses position 1 for Easy, position 2 for Hard, and ignores models after position 2. Reorder the list to change targets.
+Local and Jev use the complete ordered list, from easiest to strongest. Local preserves Easy/Hard behavior for exactly two targets and maps its escalation score to ranks for longer lists. Reorder the list to change targets.
 
-For **Jev**, all configured models are candidates. Order them from cheapest/lower capability to strongest/higher capability; the configured System One decision model selects the lowest sufficient candidate. **Advanced** contains classifier tuning, Jev's decision model and timeout, and verbose logging.
+For **Jev**, all configured models are candidates. Order them from cheapest/lower capability to strongest/higher capability; the primary System One decision model selects the lowest sufficient candidate, and an optional fallback System One model is tried when the primary fails. **Advanced** contains classifier tuning, Jev's timeout, and verbose logging.
 
 Strategy selection stays on the combo card. Auto Router details stay in **Edit Combo**. No `AUTO_ROUTER_*` environment variables are required for normal setup.
 
@@ -103,17 +103,9 @@ Point any OpenAI-compatible client at 9Router as usual and use the Auto Router c
 model: coder-auto
 ```
 
-Local now decides whether each request should go to `coder` or `coder-high`; Jev selects from its ordered candidate list. Everything after that decision is normal 9Router routing.
+Local and Jev independently route every request through the complete ordered model list. Everything after that decision is normal 9Router routing.
 
-Jev Sticky + Upgrade requires an API-key-scoped client identity and a stable conversation identity. The preferred client integration is the client-agnostic canonical header:
-
-```text
-X-9Router-Conversation-ID: <opaque stable conversation ID>
-```
-
-Header names are case-insensitive. `X-Conversation-ID`, `X-Session-ID`, and `X-Thread-ID` are also supported. For compatible request bodies, 9Router recognizes top-level `conversation_id`/`conversationId`, `session_id`/`sessionId`, and `thread_id`/`threadId`; nested `conversation.id`, `session.id`, or `thread.id`; and the same six fields in `metadata`.
-
-Sticky selections are scoped to the combo, a hashed API-key-scoped client identity, and a hashed resolved conversation identity. Raw Authorization values and raw conversation identifiers are neither logged nor persisted in sticky or pending cache keys. Clients without a supported conversation identity remain stateless for Jev routing.
+Concurrent identical Jev decisions may be coalesced while pending. Coalescing is isolated by combo, a hashed API-key-scoped client identity, a hashed conversation identity when supplied, the candidate configuration, and a sanitized request fingerprint. Raw Authorization values and raw conversation identifiers are neither logged nor persisted in pending keys. Completed requests never retain a selected tier, so later turns can downgrade or upgrade independently.
 
 ## How it works
 
@@ -231,7 +223,7 @@ Every routing decision can log the combo, level, selected target, bounded public
 
 Most users should configure Auto Router entirely through the normal 9Router UI.
 
-For **Local**, ordered `models` are targets: `models[0]` is Easy, `models[1]` is Hard, and later models are ignored.
+For **Local**, ordered `models` are targets ranked from easiest to strongest. A one-model list always selects that model; a two-model list preserves the Easy/Hard threshold behavior; lists with three or more models use the uncapped Local escalation score to select any reachable rank.
 
 ```json
 {
@@ -250,7 +242,7 @@ For **Local**, ordered `models` are targets: `models[0]` is Easy, `models[1]` is
 }
 ```
 
-For **Jev**, every configured model is a candidate and must be ordered from cheapest/lower capability to strongest/higher capability. Its persisted form includes the System One decision model and wait timeout:
+For **Jev**, every configured model is a candidate and must be ordered from cheapest/lower capability to strongest/higher capability. Configure one primary decision model or an optional ordered fallback pair. Legacy `decisionModel` values migrate to a one-element `decisionModels` list:
 
 ```json
 {
@@ -260,7 +252,7 @@ For **Jev**, every configured model is a candidate and must be ordered from chea
       "autoRouter": {
         "method": "jev",
         "jev": {
-          "decisionModel": "<system-one-model>",
+          "decisionModels": ["<primary-system-one-model>", "<optional-fallback-system-one-model>"],
           "timeoutMs": 1500
         }
       }
@@ -269,7 +261,9 @@ For **Jev**, every configured model is a candidate and must be ordered from chea
 }
 ```
 
-`jev.timeoutMs` controls how long Auto Router waits for the System One decision. On timeout, Auto Router aborts its local fetch to `/api/v1/systemone` and takes the existing fallback or sticky-route path. Current 9Router releases do not propagate that request signal through the System One handler to its provider fetch, so this is best-effort local cancellation, not a guarantee that the provider request stops or avoids usage.
+Jev tries the primary decision model first and the optional fallback only when the primary is unusable. All attempts share one overall timeout; when the chain is exhausted, routing uses the complete ordered Local target list.
+
+`jev.timeoutMs` controls how long Auto Router waits for the System One decision. On timeout, Auto Router aborts its local fetch to `/api/v1/systemone` and takes the Local fallback path. Current 9Router releases do not propagate that request signal through the System One handler to its provider fetch, so this is best-effort local cancellation, not a guarantee that the provider request stops or avoids usage.
 
 Jev dispatches to the internal HTTP listener at `http://127.0.0.1:${PORT:-20128}` rather than the external request origin, so HTTPS reverse proxies cannot change its internal transport. Set `NINE_ROUTER_INTERNAL_ORIGIN` to an `http:` or `https:` origin only when the 9Router listener is reached through a different internal service address. An unset or empty value uses the loopback default; a non-empty malformed or unsupported value fails the JEV decision with a sanitized configuration diagnostic before taking the normal local fallback. The incoming 9Router `Authorization` header is forwarded only to satisfy 9Router API-key authentication; provider credentials remain resolved inside the System One handler.
 
@@ -294,13 +288,13 @@ Invalid or missing values fall through to the next source.
 
 ### Target rules
 
-Both methods require at least two distinct usable models. Local uses only the first two; Jev uses all ordered models as candidates. The runtime returns a controlled configuration error for zero, one, duplicate, or malformed targets. Reordering Models changes the effective targets on the next saved combo.
+Both methods require one or more distinct usable models and use the complete ordered list. Local preserves Easy/Hard behavior when exactly two models are configured, while Jev selects a rank directly. The runtime returns a controlled configuration error for zero, duplicate, or malformed targets. Reordering Models changes the effective targets on the next saved combo.
 
 Auto Router → Auto Router chaining is intentionally unsupported. Runtime validation independently rejects self-references and Auto Router targets before delegation. A per-request re-entry guard remains as defense-in-depth.
 
 ### Legacy configuration compatibility
 
-Earlier Auto Router releases stored `autoRouter.easyTarget` and `autoRouter.hardTarget`. A patched installation continues using those values until the combo is saved in **Edit Combo**. The editor presents them as positions 1 and 2, followed by existing Models after duplicates are removed, so its visible order matches runtime routing. On Save, the visible model order—after any reorder or replacement—is persisted exactly, and the duplicate legacy fields are removed while Advanced settings are retained. This is idempotent: after the first save, the visible model list is authoritative. Stock 9Router safely ignores the additional `autoRouter` settings during rollback.
+Earlier Auto Router releases stored `autoRouter.easyTarget` and `autoRouter.hardTarget`. Local routing continues using those values until the combo is saved in **Edit Combo**; the editor presents them as positions 1 and 2, followed by existing Models after duplicates are removed, so its visible order matches Local runtime routing. In Jev mode those legacy fields are dormant: Edit Combo preserves the stored ordered Models list while migrating `jev.decisionModel` to `jev.decisionModels`. On Save, the visible model order—after any reorder or replacement—is persisted exactly, and the duplicate legacy fields are removed while Advanced settings are retained. This is idempotent: after the first save, the visible model list is authoritative. Stock 9Router safely ignores the additional `autoRouter` settings during rollback.
 
 Legacy environment variables remain fallback sources for classifier tuning only:
 
@@ -499,7 +493,7 @@ docker build \
 
 The test suite covers deterministic classification, false-positive regressions, routing, target validation, configuration precedence, UI integration, semantic/structural upstream discovery, persistence, runtime behavior, and the patched-container HTTP request path.
 
-`./scripts/auto-router-pipeline-parity-test.sh 9router-auto-router:local` sends one realistic 62-message, 83-tool OpenHands-style payload directly to `coder-high` and through `coder-auto` configured to select `coder-high`. Deterministic local Headroom and provider services capture both paths and require byte-identical target-provider bodies, Headroom input/output, RTK output, message/tool sizes, stream behavior, fallback/sticky combo handling, and format conversion. The direct `POST coder-high → provider` versus delegated `POST provider → provider` label is request logging identity; the captured target pipeline is identical.
+`./scripts/auto-router-pipeline-parity-test.sh 9router-auto-router:local` sends one realistic 62-message, 83-tool OpenHands-style payload directly to `coder-high` and through `coder-auto` configured to select `coder-high`. Deterministic local Headroom and provider services capture both paths and require byte-identical target-provider bodies, Headroom input/output, RTK output, message/tool sizes, stream behavior, fallback combo handling, and format conversion. The direct `POST coder-high → provider` versus delegated `POST provider → provider` label is request logging identity; the captured target pipeline is identical.
 
 Compatibility failures report the relevant image, candidate information, expected semantic structures, and failure reason without dumping minified source.
 

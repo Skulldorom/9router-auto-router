@@ -163,7 +163,7 @@ process.stdout.write(`pipeline parity snapshots: direct=${JSON.stringify(provide
 NODE
 
 logs=$(docker logs "$NAME" 2>&1)
-printf '%s' "$logs" | grep -q 'AUTO-ROUTER] combo=coder-auto level=hard target=coder-high' || { printf '%s\n' "$logs" >&2; exit 1; }
+printf '%s' "$logs" | grep -q 'AUTO-ROUTER] combo=coder-auto method=local rank=2/2 score=.* target=coder-high' || { printf '%s\n' "$logs" >&2; exit 1; }
 [ "$(printf '%s' "$logs" | grep -c 'Combo "coder-high" with 2 models (strategy: fallback, sticky:')" -eq 2 ] || { printf '%s\n' "$logs" >&2; exit 1; }
 [ "$(printf '%s' "$logs" | grep -c 'FMT: openai→ollama')" -eq 2 ] || { printf '%s\n' "$logs" >&2; exit 1; }
 [ "$(printf '%s' "$logs" | grep -c '\[HEADROOM\] reported token delta=100 before=1000 after=900')" -eq 2 ] || { printf '%s\n' "$logs" >&2; exit 1; }

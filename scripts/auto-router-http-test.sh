@@ -61,8 +61,8 @@ fi
 api() { curl --fail --silent --show-error --max-time 20 --cookie "$COOKIE_JAR" -H 'Content-Type: application/json' "$@"; }
 
 api -X POST --data "{\"provider\":\"ollama-local\",\"name\":\"mock\",\"apiKey\":\"test\",\"providerSpecificData\":{\"baseUrl\":\"http://${MOCK_NAME}:8080\"}}" "http://127.0.0.1:${PORT}/api/providers" >/dev/null
-for combo in easy hard fallback-combo auto-target; do api -X POST --data "{\"name\":\"${combo}\",\"models\":[\"ollama-local/${combo}-model\"]}" "http://127.0.0.1:${PORT}/api/combos" >/dev/null; done
-api -X POST --data '{"name":"agent","models":["easy","hard","fallback-combo"]}' "http://127.0.0.1:${PORT}/api/combos" >/dev/null
+for combo in easy mid hard only fallback-combo auto-target; do api -X POST --data "{\"name\":\"${combo}\",\"models\":[\"ollama-local/${combo}-model\"]}" "http://127.0.0.1:${PORT}/api/combos" >/dev/null; done
+api -X POST --data '{"name":"agent","models":["easy","hard"]}' "http://127.0.0.1:${PORT}/api/combos" >/dev/null
 AGENT_ID=$(api "http://127.0.0.1:${PORT}/api/combos" | node -e 'let data="";process.stdin.on("data",chunk=>data+=chunk);process.stdin.on("end",()=>{let combo=JSON.parse(data).combos.find(combo=>combo.name==="agent");if(!combo)process.exit(1);process.stdout.write(combo.id)})')
 API_KEY=$(api -X POST --data '{"name":"integration"}' "http://127.0.0.1:${PORT}/api/keys" | node -e 'let data="";process.stdin.on("data",chunk=>data+=chunk);process.stdin.on("end",()=>process.stdout.write(JSON.parse(data).key))')
 set_auto() { api -X PATCH --data "{\"comboStrategies\":{\"agent\":{\"fallbackStrategy\":\"auto\",\"autoRouter\":${1}}}}" "http://127.0.0.1:${PORT}/api/settings" >/dev/null; }
@@ -89,7 +89,7 @@ printf '%s' "$hard_response" | grep -q 'data: ' || { echo "Hard streaming reques
 
 [ "$(count_model easy-model)" -eq 1 ] || { echo "Expected exactly one easy-model provider call, saw $(count_model easy-model)." >&2; journal >&2; exit 1; }
 [ "$(count_model hard-model)" -eq 1 ] || { echo "Expected exactly one hard-model provider call, saw $(count_model hard-model)." >&2; journal >&2; exit 1; }
-[ "$(journal | grep -c '"url":"/api/chat"')" -eq 2 ] || { echo "Expected exactly two provider requests; models after position 2 must be ignored." >&2; journal >&2; exit 1; }
+[ "$(journal | grep -c '"url":"/api/chat"')" -eq 2 ] || { echo "Expected exactly two provider requests for this two-target Local fixture." >&2; journal >&2; exit 1; }
 
 easy_body=$(journal | grep -m1 'easy-model')
 hard_body=$(journal | grep -m1 'hard-model')
@@ -101,23 +101,31 @@ printf '%s' "$hard_body" | grep -q 'tools.*ping' || { echo "Hard delegation lost
 printf '%s' "$hard_body" | grep -q 'stream.*true' || { echo "Hard delegation changed stream: ${hard_body}" >&2; exit 1; }
 
 logs=$(docker logs "$NAME" 2>&1)
-printf '%s' "$logs" | grep -q 'AUTO-ROUTER] combo=agent level=easy target=easy score=.* reasons=' || { printf '%s\n' "$logs" >&2; exit 1; }
-printf '%s' "$logs" | grep -q 'AUTO-ROUTER] combo=agent level=hard target=hard score=.* reasons=' || { printf '%s\n' "$logs" >&2; exit 1; }
+printf '%s' "$logs" | grep -q 'AUTO-ROUTER] combo=agent method=local rank=1/2 score=.* target=easy reasons=' || { printf '%s\n' "$logs" >&2; exit 1; }
+printf '%s' "$logs" | grep -q 'AUTO-ROUTER] combo=agent method=local rank=2/2 score=.* target=hard reasons=' || { printf '%s\n' "$logs" >&2; exit 1; }
 printf '%s' "$logs" | grep -q 'sentinel-easy\|sentinel-hard' && { echo 'Auto Router logs leaked request content.' >&2; exit 1; }
 printf '%s' "$logs" | grep -q 'Combo "easy" with 1 models' || { printf '%s\n' "$logs" >&2; exit 1; }
 printf '%s' "$logs" | grep -q 'Combo "hard" with 1 models' || { printf '%s\n' "$logs" >&2; exit 1; }
 printf '%s' "$logs" | grep -q '\[COMBO\] Trying model 1/1: ollama-local/easy-model' || { printf '%s\n' "$logs" >&2; exit 1; }
 printf '%s' "$logs" | grep -q '\[COMBO\] Trying model 1/1: ollama-local/hard-model' || { printf '%s\n' "$logs" >&2; exit 1; }
 
-# Ordered models are authoritative: reordering swaps effective Easy and Hard targets,
-# and later models remain ignored.
-set_models '["hard","easy","fallback-combo"]'
-reordered_easy=$(complete '{"model":"agent","messages":[{"role":"user","content":"rename this after reorder"}]}')
-printf '%s' "$reordered_easy" | grep -Eq '"content":"ok"|data: ' || { echo "Reordered Easy request failed: ${reordered_easy}" >&2; exit 1; }
-[ "$(count_model hard-model)" -eq 2 ] || { echo "Reordering models did not change the Easy target." >&2; journal >&2; exit 1; }
+# Ordered models are authoritative for Local routing: a three-tier list maps the uncapped
+# escalation score to every reachable rank (trivial -> rank 1, medium -> rank 2, hard -> rank 3).
+set_models '["mid","easy","hard"]'
+rank_first=$(complete '{"model":"agent","messages":[{"role":"user","content":"rename this after reorder sentinel-rank-one"}]}')
+rank_second=$(complete '{"model":"agent","messages":[{"role":"user","content":"please review the change sentinel-rank-two"}]}')
+rank_third=$(complete '{"model":"agent","messages":[{"role":"user","content":"fully audit this repository concurrency race condition sentinel-rank-three"}]}')
+for response in "$rank_first" "$rank_second" "$rank_third"; do printf '%s' "$response" | grep -Eq '"content":"ok"|data: ' || { echo "Ranked Local request failed: ${response}" >&2; exit 1; }; done
+[ "$(count_model mid-model)" -eq 1 ] || { echo "Lowest Local rank did not select mid." >&2; journal >&2; exit 1; }
+[ "$(count_model easy-model)" -eq 2 ] || { echo "Intermediate Local rank did not select easy." >&2; journal >&2; exit 1; }
+[ "$(count_model hard-model)" -eq 2 ] || { echo "Strongest Local rank did not select hard." >&2; journal >&2; exit 1; }
+set_models '["easy","easy"]'
+expect_error '{"model":"agent","messages":[{"role":"user","content":"duplicate targets"}]}' 'requires one or more distinct usable ordered models'
 set_models '["only"]'
-expect_error '{"model":"agent","messages":[{"role":"user","content":"missing hard target"}]}' 'requires two distinct usable models'
-set_models '["easy","hard","fallback-combo"]'
+only_response=$(complete '{"model":"agent","messages":[{"role":"user","content":"rename this button sentinel-only"}]}')
+printf '%s' "$only_response" | grep -Eq '"content":"ok"|data: ' || { echo "Single-target Local request failed: ${only_response}" >&2; exit 1; }
+[ "$(count_model only-model)" -eq 1 ] || { echo "Single-target Local request did not select its only model." >&2; journal >&2; exit 1; }
+set_models '["easy","hard"]'
 
 set_auto '{"easyTarget":"ghost-easy","hardTarget":"hard"}'
 expect_error '{"model":"agent","messages":[{"role":"user","content":"rename this button"}]}' 'Easy target .*ghost-easy.* does not exist'
@@ -126,7 +134,7 @@ expect_error '{"model":"agent","messages":[{"role":"user","content":"fully audit
 set_auto '{"easyTarget":"agent","hardTarget":"hard"}'
 expect_error '{"model":"agent","messages":[{"role":"user","content":"rename this button"}]}' 'is the Auto Router combo itself'
 
-# Auto Router → Auto Router chaining is explicitly unsupported: even a stale-free
+# Auto Router to Auto Router chaining is explicitly unsupported: even a stale-free
 # target configured with fallbackStrategy "auto" must fail closed.
 api -X PATCH --data '{"comboStrategies":{"agent":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"auto-target","hardTarget":"hard"}},"auto-target":{"fallbackStrategy":"auto","autoRouter":{"easyTarget":"easy","hardTarget":"hard"}}}}' "http://127.0.0.1:${PORT}/api/settings" >/dev/null
 expect_error '{"model":"agent","messages":[{"role":"user","content":"rename this button"}]}' 'chaining is not supported'
@@ -136,17 +144,28 @@ fallback_response=$(complete '{"model":"agent","messages":[{"role":"user","conte
 printf '%s' "$fallback_response" | grep -q 'mock' || { echo "Ordinary fallback target failed: ${fallback_response}" >&2; exit 1; }
 [ "$(count_model fallback-combo-model)" -eq 1 ] || { echo "Ordinary fallback target was not executed normally." >&2; exit 1; }
 
-# The canonical header must traverse the patched runtime request path and retain one
-# initial Jev decision for repeated requests in the same client/API-key conversation.
+# Jev always ranks the complete ordered model list. A deliberately invalid decision
+# model deterministically exercises the final Local fallback; dormant legacy targets
+# must not substitute an unordered fallback target when that decision fails.
+set_models '["easy","mid","hard"]'
+set_auto '{"method":"jev","easyTarget":"fallback-combo","hardTarget":"mid","jev":{"decisionModel":"oc/invalid-jev-decision-model"}}'
+jev_fallback=$(complete '{"model":"agent","messages":[{"role":"user","content":"fully audit this repository concurrency race condition sentinel-jev-fallback"}]}')
+printf '%s' "$jev_fallback" | grep -q 'mock' || { echo "Jev fallback request did not reach the provider path: ${jev_fallback}" >&2; exit 1; }
+[ "$(count_model hard-model)" -eq 3 ] || { echo "Jev local fallback ignored the ordered strongest rank." >&2; journal >&2; exit 1; }
+[ "$(count_model mid-model)" -eq 1 ] || { echo "Jev local fallback applied a stale legacy hard target." >&2; journal >&2; exit 1; }
+printf '%s' "$(docker logs "$NAME" 2>&1)" | grep -q 'method=jev selected=hard rank=3/3 source=local-fallback' || { dump_container_logs "$NAME"; exit 1; }
+
+# Canonical conversation headers traverse the patched runtime request path and are never
+# retained after a completed turn: repeated sequential turns each decide independently.
 set_auto '{"method":"jev","jev":{"decisionModel":"oc/jev-1.13-free"}}'
 header_request='{"model":"agent","messages":[{"role":"user","content":"rename one label sentinel-canonical-header"}]}'
-header_first=$(complete_with_header 'canonical-sticky-test' "$header_request")
-header_second=$(complete_with_header 'canonical-sticky-test' "$header_request")
+header_first=$(complete_with_header 'canonical-header-test' "$header_request")
+header_second=$(complete_with_header 'canonical-header-test' "$header_request")
 printf '%s' "$header_first" | grep -q 'mock' || { echo "Canonical-header Jev request did not reach the provider path: ${header_first}" >&2; exit 1; }
 printf '%s' "$header_second" | grep -q 'mock' || { echo "Repeated canonical-header Jev request did not reach the provider path: ${header_second}" >&2; exit 1; }
-[ "$(docker logs "$NAME" 2>&1 | grep -Ec 'method=jev.*source=(jev sticky=new|local-fallback)')" -eq 1 ] || { echo "Expected one initial Jev decision for repeated canonical-header requests." >&2; dump_container_logs "$NAME"; exit 1; }
+[ "$(docker logs "$NAME" 2>&1 | grep -Ec 'method=jev.*source=')" -eq 3 ] || { echo "Completed Jev turns retained a previous tier instead of deciding independently." >&2; dump_container_logs "$NAME"; exit 1; }
 logs=$(docker logs "$NAME" 2>&1)
-printf '%s' "$logs" | grep -q 'canonical-sticky-test' && { echo "Auto Router logs leaked the canonical conversation header value." >&2; exit 1; }
+printf '%s' "$logs" | grep -q 'canonical-header-test' && { echo "Auto Router logs leaked the canonical conversation header value." >&2; exit 1; }
 printf '%s' "$logs" | grep -q "${API_KEY}" && { echo "Auto Router logs leaked the API key." >&2; exit 1; }
 
-echo "Auto Router HTTP integration test passed: patched HTTP path selects exactly one target, preserves body/stream/tools, delegates into normal 9Router combo handling, proves canonical conversation-header Jev stickiness, and fails closed on self/auto/stale targets."
+echo "Auto Router HTTP integration test passed: patched HTTP path selects exactly one target, preserves body/stream/tools, delegates into normal 9Router combo handling, proves ordered Local tier selection, stateless Jev turns, ordered Jev local fallback, and fails closed on self/auto/duplicate/stale targets."

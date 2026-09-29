@@ -174,11 +174,11 @@ const phase = process.env.PHASE;
     if (await modal.getByText("Strategy", { exact: true }).count()) throw new Error(`${phase} Edit Combo retained a Strategy selector`);
     const routingMethod = modal.locator("label").filter({ hasText: /^Routing method/ }).locator("select");
     if (await routingMethod.count() !== 1 || await routingMethod.inputValue() !== "local") throw new Error(`${phase} legacy Auto Router did not default to Local classifier`);
-    for (const label of ["Easy", "Hard", "Ignored"]) if (await modal.getByText(label, { exact: true }).count() !== 1) throw new Error(`${phase} did not label ordered model target as ${label}`);
+    for (const label of ["Tier 1 · Lowest", "Tier 2", "Tier 3 · Strongest"]) if (await modal.getByText(label, { exact: true }).count() !== 1) throw new Error(`${phase} did not label ordered model tier as ${label}`);
     if (await modal.getByText("Legacy targets remain effective until this model order is saved.", { exact: true }).count() !== 1) throw new Error(`${phase} did not identify pending legacy target migration`);
     const migratedModels = await displayedModels(modal);
     if (JSON.stringify(migratedModels) !== JSON.stringify(["coder", "coder-high", "coder-auto-model"])) { const { settings } = await settingsAndCombo(); throw new Error(`${phase} did not initialize model order from legacy routing: ${JSON.stringify(migratedModels)} settings=${JSON.stringify(settings.comboStrategies?.["coder-auto"])}`); }
-    await modal.getByText("Advanced classifier settings", { exact: true }).click();
+    await modal.getByText("Local classifier settings", { exact: true }).click();
     const hardThreshold = modal.getByLabel(/Hard threshold/);
     if (await hardThreshold.inputValue() !== "7") throw new Error(`${phase} did not preserve advanced settings while switching strategies`);
     if (settingsPatches !== 7) throw new Error(`${phase} unexpectedly persisted modal edits before Save`);

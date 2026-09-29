@@ -54,10 +54,7 @@ const MAX_HISTORICAL_SEMANTIC_SCORE = 4;
 const GATED_WEIGHT = 6;
 const WEAK_WEIGHT = 3;
 const activeAutoCombos = new WeakMap();
-const jevStickyRoutes = new Map();
-const jevStickyPending = new Map();
-const JEV_STICKY_TTL_MS = 30 * 60 * 1000;
-const JEV_STICKY_MAX_ENTRIES = 2048;
+const jevPending = new Map();
 const TEXT_FIELDS = new Set(["text", "content", "input_text", "output_text", "arguments", "output"]);
 const USER_TEXT_FIELDS = new Set(["text", "content", "input_text"]);
 const PART_FIELDS = new Set(["content", "parts", "input"]);
@@ -90,10 +87,11 @@ function getConfig(env = process.env, explicit = {}) {
     largeToolResultChars: configuredPositiveInt(selected, "largeToolResultChars", env.AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS, DEFAULTS.largeToolResultChars),
     verbose: configuredBoolean(selected, "verbose", env.AUTO_ROUTER_VERBOSE, DEFAULTS.verbose),
     method: selected.method === "jev" ? "jev" : "local",
-    jev: {
-      decisionModel: nonEmptyString(selected.jev?.decisionModel),
-      timeoutMs: validBoundedInt(selected.jev?.timeoutMs, NUMERIC_BOUNDS.jevTimeoutMs) || DEFAULTS.jevTimeoutMs,
-    },
+    jev: (() => {
+      const configured = selected.jev?.decisionModels;
+      const decisionModels = Array.isArray(configured) ? configured.map(nonEmptyString) : [nonEmptyString(selected.jev?.decisionModel)].filter(Boolean);
+      return { decisionModel: decisionModels[0] || null, decisionModels, timeoutMs: validBoundedInt(selected.jev?.timeoutMs, NUMERIC_BOUNDS.jevTimeoutMs) || DEFAULTS.jevTimeoutMs };
+    })(),
   };
 }
 
@@ -348,29 +346,38 @@ function legacyTargets(config) {
 }
 function orderedTargets(models) {
   if (!Array.isArray(models)) return null;
-  const targets = models.slice(0, 2).map(nonEmptyString);
-  return targets[0] && targets[1] ? targets : null;
+  const targets = models.map(nonEmptyString);
+  return targets.length && !targets.some((target) => !target) ? targets : null;
 }
 function effectiveTargets(models, persisted) {
   const targets = legacyTargets(persisted) || orderedTargets(models);
-  if (!targets || targets[0] === targets[1]) throw new Error("requires two distinct usable models in positions 1 (Easy) and 2 (Hard).");
+  if (!targets || new Set(targets).size !== targets.length) throw new Error("requires one or more distinct usable ordered models.");
   return targets;
 }
 function jevCandidates(models) {
-  if (!Array.isArray(models)) throw new Error("Jev requires at least two valid candidate models.");
-  const candidates = models.map(nonEmptyString);
-  if (candidates.length < 2 || candidates.some((candidate) => !candidate)) throw new Error("Jev requires at least two valid candidate models.");
+  const candidates = effectiveTargets(models);
   if (candidates.length > 255) throw new Error("Jev supports at most 255 candidates.");
-  if (new Set(candidates).size !== candidates.length) throw new Error("Jev candidates must be distinct.");
   return candidates;
 }
-function selectRoute(body, comboName, { env = process.env, comboStrategies = {}, globalStrategy = "fallback", knownCombos, models } = {}) {
-  const persisted = comboStrategies?.[comboName]?.autoRouter;
-  const [easyTarget, hardTarget] = effectiveTargets(models, persisted);
-  const config = { ...getConfig(env, persisted), easyTarget, hardTarget }, classification = classifyTaskComplexity(body, config);
-  const target = classification.level === "easy" ? easyTarget : hardTarget;
-  validateAutoTarget(comboName, target, comboStrategies, globalStrategy, knownCombos ? new Set(knownCombos) : null, classification.level === "easy" ? "Easy" : "Hard");
-  return { target, classification, config };
+function selectLocalRank({ escalationScore, candidateCount, hardThreshold }) {
+  if (!Number.isSafeInteger(candidateCount) || candidateCount < 1) throw new Error("requires one or more distinct usable ordered models.");
+  if (candidateCount === 1) return 0;
+  const score = Number.isFinite(escalationScore) ? Math.max(0, escalationScore) : hardThreshold;
+  if (candidateCount === 2) return score >= hardThreshold ? 1 : 0;
+  return Math.min(candidateCount - 1, Math.floor(score / hardThreshold));
+}
+function localTargetLabel(index, candidateCount) {
+  return candidateCount === 2 ? index === 0 ? "Easy" : "Hard" : `Local rank ${index + 1}`;
+}
+function selectRoute(body, comboName, { env = process.env, comboStrategies = {}, globalStrategy = "fallback", knownCombos, models, ignoreLegacyTargets = false } = {}) {
+  const persisted = comboStrategies?.[comboName]?.autoRouter, legacy = ignoreLegacyTargets ? null : legacyTargets(persisted);
+  const targets = legacy || effectiveTargets(models);
+  if (new Set(targets).size !== targets.length) throw new Error("requires one or more distinct usable ordered models.");
+  const config = { ...getConfig(env, persisted), easyTarget: targets[0], hardTarget: targets[1] || targets[0] }, classification = classifyTaskComplexity(body, config);
+  const index = selectLocalRank({ escalationScore: classification.escalationScore, candidateCount: targets.length, hardThreshold: config.hardThreshold });
+  const target = targets[index];
+  validateAutoTarget(comboName, target, comboStrategies, globalStrategy, knownCombos ? new Set(knownCombos) : null, localTargetLabel(index, targets.length));
+  return { target, index, candidates: targets, classification, config, legacy: Boolean(legacy) };
 }
 function truncate(value, limit) { return value.length > limit ? `${value.slice(0, limit)}…` : value; }
 function jevRequest(body, candidates, startIndex = 0) {
@@ -432,7 +439,7 @@ function deadline(start, timeoutMs, timers = globalThis) {
 }
 function failureReason(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return message === "timeout" || message === "invalid-output" || message === "invalid-candidate" || message === "missing-decision-model" ? message : "decision-error";
+  return message === "timeout" || message === "invalid-output" || message === "invalid-candidate" ? message : "decision-error";
 }
 function jevFailureStage(error) {
   const message = error instanceof Error ? error.message : String(error);
@@ -443,35 +450,52 @@ function jevFailureStage(error) {
   if (message === "invalid-response" || message === "invalid-output" || message === "invalid-candidate") return "invalid-decision-response";
   return "decision-error";
 }
-function logJevFailure(log, comboName, error) {
-  log.warn("AUTO-ROUTER", `combo=${comboName} method=jev decision_failure stage=${jevFailureStage(error)}`);
+function logJevFailure(log, comboName, decisionModel, error) {
+  log.warn("AUTO-ROUTER", `combo=${comboName} method=jev decision_model=${decisionModel} decision_failure stage=${jevFailureStage(error)}`);
 }
 function jevOptions(comboName, { comboStrategies = {}, globalStrategy = "fallback", models } = {}) {
   const persisted = comboStrategies?.[comboName]?.autoRouter;
-  const config = getConfig(process.env, persisted), candidates = jevCandidates(models);
+  const config = getConfig(process.env, persisted), candidates = jevCandidates(models), decisionModels = config.jev.decisionModels;
+  if (!decisionModels.length || decisionModels.length > 2 || decisionModels.some((model) => !model)) throw new Error("Jev requires a primary and optional valid fallback decision model.");
+  if (new Set(decisionModels).size !== decisionModels.length) throw new Error("Jev decision models must be distinct.");
   for (const candidate of candidates) validateAutoTarget(comboName, candidate, comboStrategies, globalStrategy, null, "Jev candidate");
   return { config, candidates };
 }
-async function selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, startIndex = 0, prepared }) {
+async function selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, startIndex = 0, prepared, log }) {
   const { config, candidates } = prepared || jevOptions(comboName, { comboStrategies, globalStrategy, models });
-  if (!config.jev.decisionModel) throw new Error("missing-decision-model");
   if (typeof decide !== "function") throw new Error("decision-error");
   const allowed = candidates.slice(startIndex);
   if (!allowed.length) throw new Error("invalid-candidate");
-  const request = jevRequest(body, allowed, startIndex);
-  request.model = config.jev.decisionModel;
-  const index = await deadline(async (signal) => startIndex + candidateIndex(
-    await responseJson(await decide(request, config.jev.decisionModel, signal)),
-    allowed,
-    startIndex,
-  ), config.jev.timeoutMs);
-  return { target: candidates[index], index, candidates, config };
+  const failures = [];
+  try {
+    return await deadline(async (signal) => {
+      for (const decisionModel of config.jev.decisionModels) {
+        try {
+          const request = jevRequest(body, allowed, startIndex);
+          request.model = decisionModel;
+          const index = startIndex + candidateIndex(await responseJson(await decide(request, decisionModel, signal)), allowed, startIndex);
+          return { target: candidates[index], index, candidates, config, decisionModel };
+        } catch (error) {
+          failures.push({ decisionModel, error });
+          logJevFailure(log || { warn() {} }, comboName, decisionModel, error);
+          if (signal.aborted) throw error;
+        }
+      }
+      const error = failures.at(-1)?.error || new Error("decision-error");
+      error.jevFailures = failures;
+      throw error;
+    }, config.jev.timeoutMs);
+  } catch (error) {
+    if (!error.jevFailures && error.message === "timeout") {
+      const decisionModel = config.jev.decisionModels[failures.length] || config.jev.decisionModels.at(-1);
+      if (!failures.some((failure) => failure.decisionModel === decisionModel && failure.error === error)) logJevFailure(log || { warn() {} }, comboName, decisionModel, error);
+    }
+    throw error;
+  }
 }
-function selectJevFallbackRoute(body, comboName, options = {}) {
-  const { config, candidates } = jevOptions(comboName, options), classification = classifyTaskComplexity(body, config);
-  const index = classification.level === "easy" ? 0 : candidates.length - 1, target = candidates[index];
-  return { target, index, candidates, classification, config };
-}
+// Jev candidates are always the ordered combo models, so an exhausted decision chain must
+// rank the same list. Dormant legacy targets belong to Local classification only.
+function selectJevFallbackRoute(body, comboName, options = {}) { return selectRoute(body, comboName, { ...options, ignoreLegacyTargets: true }); }
 const CONVERSATION_FIELDS = ["conversation_id", "conversationId", "session_id", "sessionId", "thread_id", "threadId"];
 const CONVERSATION_HEADERS = ["x-9router-conversation-id", "x-conversation-id", "x-session-id", "x-thread-id"];
 function conversationValue(value) { return nonEmptyString(value) && value.trim().length <= 256 ? value.trim() : null; }
@@ -511,55 +535,36 @@ function resolveConversationIdentity({ body, headers } = {}) {
   return null;
 }
 function stableConversationId(body) { return resolveConversationIdentity({ body }); }
-// Sticky routes require API-key-scoped client identity and a recognized conversation identity.
+// Pending decisions use hashed client/conversation identity only for isolation and coalescing.
 function identityHash(identity) { return createHash("sha256").update(identity).digest("hex"); }
-function stickyKey(comboName, body, clientIdentity, headers) {
+function pendingScope(comboName, body, clientIdentity, headers) {
   const conversation = resolveConversationIdentity({ body, headers }), client = nonEmptyString(clientIdentity);
   return conversation && client ? `${comboName}\u0000${identityHash(client)}\u0000${identityHash(conversation)}` : null;
 }
-function candidateSignature(candidates) { return JSON.stringify(candidates); }
-function decisionFingerprint(body, candidates, startIndex, decisionModel) {
-  const request = jevRequest(body, candidates.slice(startIndex), startIndex);
-  request.model = decisionModel;
+function candidateSignature(candidates, decisionModels = []) { return JSON.stringify({ candidates, decisionModels }); }
+function decisionFingerprint(body, candidates, decisionModels) {
+  const request = jevRequest(body, candidates, 0);
+  request.model = decisionModels;
   return createHash("sha256").update(JSON.stringify(request)).digest("hex");
 }
-function cleanupStickyRoutes(now) {
-  for (const [key, entry] of jevStickyRoutes) if (entry.expiresAt <= now) jevStickyRoutes.delete(key);
-  while (jevStickyRoutes.size > JEV_STICKY_MAX_ENTRIES) jevStickyRoutes.delete(jevStickyRoutes.keys().next().value);
+function pendingKey(comboName, body, clientIdentity, headers, candidates = [], decisionModels = []) {
+  const scope = pendingScope(comboName, body, clientIdentity, headers);
+  return scope ? `${scope}\u0000${identityHash(candidateSignature(candidates, decisionModels))}\u0000${decisionFingerprint(body, candidates, decisionModels)}` : null;
 }
-function readStickyRoute(key, candidates, now) {
-  if (!key) return null;
-  cleanupStickyRoutes(now);
-  const entry = jevStickyRoutes.get(key);
-  if (!entry || entry.signature !== candidateSignature(candidates) || !Number.isSafeInteger(entry.index) || entry.index < 0 || entry.index >= candidates.length || candidates[entry.index] !== entry.target) {
-    if (entry) jevStickyRoutes.delete(key);
-    return null;
-  }
-  entry.expiresAt = now + JEV_STICKY_TTL_MS;
-  entry.escalationScore = Number.isFinite(entry.escalationScore) ? entry.escalationScore : 0;
-  jevStickyRoutes.delete(key);
-  jevStickyRoutes.set(key, entry);
-  return entry;
-}
-function writeStickyRoute(key, route, now, pending) {
-  if (!key || (pending && jevStickyPending.get(key) !== pending)) return;
-  const signature = candidateSignature(route.candidates), existing = jevStickyRoutes.get(key);
-  if (existing && existing.signature !== signature) return;
-  cleanupStickyRoutes(now);
-  jevStickyRoutes.delete(key);
-  jevStickyRoutes.set(key, { target: route.target, index: route.index, signature, escalationScore: route.classification?.level === "hard" ? route.classification.escalationScore : 0, expiresAt: now + JEV_STICKY_TTL_MS });
-  cleanupStickyRoutes(now);
-}
-function pendingSelection(key, signature, mode, startIndex, fingerprint, select) {
-  if (!key) return { promise: Promise.resolve().then(select), owner: true, entry: null, release() {} };
-  const pending = jevStickyPending.get(key);
-  if (pending && pending.signature === signature && pending.mode === mode && pending.startIndex === startIndex && pending.fingerprint === fingerprint) return { promise: pending.promise, owner: false, entry: pending, release() {} };
-  const entry = { signature, mode, startIndex, fingerprint, promise: Promise.resolve().then(select) };
-  jevStickyPending.set(key, entry);
-  return { promise: entry.promise, owner: true, entry, release() { if (jevStickyPending.get(key) === entry) jevStickyPending.delete(key); } };
+function pendingSelection(key, select) {
+  if (!key) return { promise: Promise.resolve().then(select) };
+  const pending = jevPending.get(key);
+  if (pending) return { promise: pending.promise };
+  const entry = { promise: Promise.resolve().then(select) };
+  jevPending.set(key, entry);
+  entry.promise.then(
+    () => { if (jevPending.get(key) === entry) jevPending.delete(key); },
+    () => { if (jevPending.get(key) === entry) jevPending.delete(key); },
+  );
+  return { promise: entry.promise };
 }
 function errorResponse(message) { return new Response(JSON.stringify({ error: { message: `AUTO-ROUTER: ${message}` } }), { status: 400, headers: { "Content-Type": "application/json" } }); }
-async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy, log, delegate, targetExists, models, decide, clientIdentity, conversationHeaders, now = Date.now() }) {
+async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy, log, delegate, targetExists, models, decide, clientIdentity, conversationHeaders }) {
   const active = body && typeof body === "object" ? activeAutoCombos.get(body) : null;
   if (active?.has(comboName)) {
     const message = `recursion blocked: combo "${comboName}" was reached again while resolving this request.`;
@@ -569,54 +574,25 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
   const nextActive = active || new Set();
   if (body && typeof body === "object") activeAutoCombos.set(body, nextActive);
   nextActive.add(comboName);
-  let releasePending = null, pendingEntry = null;
   try {
     const persisted = comboStrategies?.[comboName]?.autoRouter;
     const method = getConfig(process.env, persisted).method;
-    let route, source = "local", failure = null, previousIndex = null, cacheKey = null, pendingOwner = false;
+    let route, source = "local", failure = null;
     if (method === "jev") {
       let prepared;
       try { prepared = jevOptions(comboName, { comboStrategies, globalStrategy, models }); }
       catch (error) { log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${error.message}`); return errorResponse(error.message); }
-      cacheKey = stickyKey(comboName, body, clientIdentity, conversationHeaders);
-      const signature = candidateSignature(prepared.candidates), sticky = readStickyRoute(cacheKey, prepared.candidates, now);
-      if (sticky) {
-        route = { target: sticky.target, index: sticky.index, candidates: prepared.candidates, config: prepared.config, classification: classifyTaskComplexity(body, prepared.config) };
-        if (route.classification.level === "hard" && route.classification.escalationScore > sticky.escalationScore && route.index < route.candidates.length - 1) {
-          previousIndex = route.index;
-          const classification = route.classification, retained = route;
-          const selection = pendingSelection(cacheKey, signature, "upgrade", previousIndex, decisionFingerprint(body, prepared.candidates, previousIndex, prepared.config.jev.decisionModel), async () => {
-            try {
-              const selected = await selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, startIndex: previousIndex, prepared });
-              selected.classification = classification;
-              return { route: selected, source: "jev-upgrade", failure: null };
-            } catch (error) {
-              logJevFailure(log, comboName, error);
-              sticky.escalationScore = classification.escalationScore;
-              return { route: retained, source: "sticky", failure: failureReason(error) };
-            }
-          });
-          pendingOwner = selection.owner;
-          releasePending = selection.release;
-          pendingEntry = selection.entry;
-          ({ route, source, failure } = await selection.promise);
-        } else source = "sticky";
-      } else {
-        const selection = pendingSelection(cacheKey, signature, "initial", 0, decisionFingerprint(body, prepared.candidates, 0, prepared.config.jev.decisionModel), async () => {
-          try {
-            const selected = await selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, prepared });
-            selected.classification = classifyTaskComplexity(body, prepared.config);
-            return { route: selected, source: "jev", failure: null };
-          } catch (error) {
-            logJevFailure(log, comboName, error);
-            const fallbackFailure = failureReason(error);
-            return { route: selectJevFallbackRoute(body, comboName, { comboStrategies, globalStrategy, models }), source: "local-fallback", failure: fallbackFailure };
-          }
-        });
-        pendingOwner = selection.owner;
-        releasePending = selection.release;
-        pendingEntry = selection.entry;
-        ({ route, source, failure } = await selection.promise);
+      const key = pendingKey(comboName, body, clientIdentity, conversationHeaders, prepared.candidates, prepared.config.jev.decisionModels);
+      const selection = pendingSelection(key, () => selectJevRoute({ body, comboName, comboStrategies, globalStrategy, models, decide, prepared, log }));
+      try {
+        route = { ...await selection.promise, classification: classifyTaskComplexity(body, prepared.config) };
+        source = "jev";
+      } catch (error) {
+        failure = failureReason(error);
+        const decisionModels = prepared.config.jev.decisionModels;
+        log.info("AUTO-ROUTER", `combo=${comboName} method=jev ${decisionModels.length === 1 ? "no fallback JEV configured" : "all configured JEV decision models failed"}; using local router`);
+        route = selectJevFallbackRoute(body, comboName, { comboStrategies, globalStrategy, models });
+        source = "local-fallback";
       }
     } else {
       try { route = selectRoute(body, comboName, { comboStrategies, globalStrategy, models }); }
@@ -626,25 +602,21 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
     if (targetExists) {
       const exists = await targetExists(target);
       if (!exists) {
-        const label = source === "local-fallback" || source === "local" ? (route.classification.level === "easy" ? "Easy" : "Hard") : "Jev candidate";
+        const label = source === "local-fallback" || source === "local" ? localTargetLabel(route.index, route.candidates.length) : "Jev candidate";
         const message = `${label} target "${target}" does not exist.`;
         log.warn("AUTO-ROUTER", `${comboName} routing blocked: ${message}`);
         return errorResponse(message);
       }
     }
-    if (pendingOwner && cacheKey && (source === "jev" || source === "jev-upgrade" || source === "local-fallback")) writeStickyRoute(cacheKey, route, now, pendingEntry);
-    if (source === "jev") log.info("AUTO-ROUTER", `combo=${comboName} method=jev selected=${target} rank=${route.index + 1} source=jev sticky=new`);
-    else if (source === "jev-upgrade") log.info("AUTO-ROUTER", `combo=${comboName} method=jev selected=${target} rank=${route.index + 1} source=jev-upgrade previous_rank=${previousIndex + 1}`);
-    else if (source === "sticky") log.info("AUTO-ROUTER", `combo=${comboName} method=jev selected=${target} rank=${route.index + 1} source=sticky${failure ? ` reason=upgrade-${failure}` : ""}`);
-    else if (source === "local-fallback") log.info("AUTO-ROUTER", `combo=${comboName} method=jev selected=${target} source=local-fallback reason=${failure}`);
-    else log.info("AUTO-ROUTER", `combo=${comboName} level=${route.classification.level} target=${target} score=${route.classification.score} reasons=${route.classification.reasons.join(",") || "none"}`);
+    if (source === "jev") log.info("AUTO-ROUTER", `combo=${comboName} method=jev decision_model=${route.decisionModel} selected=${target} rank=${route.index + 1}/${route.candidates.length} source=jev`);
+    else if (source === "local-fallback") log.info("AUTO-ROUTER", `combo=${comboName} method=jev selected=${target} rank=${route.index + 1}/${route.candidates.length} source=local-fallback reason=${failure}`);
+    else log.info("AUTO-ROUTER", `combo=${comboName} method=local rank=${route.index + 1}/${route.candidates.length} score=${route.classification.escalationScore} target=${target} reasons=${route.classification.reasons.join(",") || "none"}`);
     if (config.verbose && route.classification) log.info("AUTO-ROUTER", `combo=${comboName} metadata=${JSON.stringify(route.classification.metadata)}`);
     return await delegate(body, target);
   } finally {
-    if (releasePending) releasePending();
     nextActive.delete(comboName);
     if (nextActive.size === 0 && body && typeof body === "object") activeAutoCombos.delete(body);
   }
 }
 
-module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, routeAutoCombo, validateAutoTarget, effectiveTargets, jevCandidates, jevRequest, candidateIndex, deadline, stableConversationId, resolveConversationIdentity, stickyKey };
+module.exports = { DEFAULTS, NUMERIC_BOUNDS, HARD_TERMS, STRONG_TERMS, WEAK_TERMS, getConfig, classifyTaskComplexity, selectRoute, selectLocalRank, routeAutoCombo, validateAutoTarget, effectiveTargets, jevCandidates, jevRequest, candidateIndex, deadline, stableConversationId, resolveConversationIdentity, pendingKey };
