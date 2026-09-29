@@ -6,10 +6,14 @@ const INTERNAL_ORIGIN_ENV = "NINE_ROUTER_INTERNAL_ORIGIN";
 function configuredOrigin(env = process.env) {
   const explicit = typeof env?.[INTERNAL_ORIGIN_ENV] === "string" ? env[INTERNAL_ORIGIN_ENV].trim() : "";
   if (explicit) {
+    let url;
     try {
-      const url = new URL(explicit);
-      if (url.protocol === "http:" || url.protocol === "https:") return url.origin;
-    } catch {}
+      url = new URL(explicit);
+    } catch {
+      throw dispatchError("systemone-invalid-origin");
+    }
+    if (url.protocol === "http:" || url.protocol === "https:") return url.origin;
+    throw dispatchError("systemone-invalid-origin");
   }
   const port = Number(env?.PORT);
   return `http://127.0.0.1:${Number.isSafeInteger(port) && port > 0 && port <= 65535 ? port : DEFAULT_PORT}`;
@@ -22,9 +26,10 @@ function dispatchError(code) {
 }
 
 async function dispatchInternalSystemOne({ body, model, authorization, signal, fetchImpl = globalThis.fetch, env = process.env } = {}) {
+  const url = new URL("/api/v1/systemone", configuredOrigin(env));
   let response;
   try {
-    response = await fetchImpl(new URL("/api/v1/systemone", configuredOrigin(env)), {
+    response = await fetchImpl(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(authorization ? { Authorization: authorization } : {}) },
       body: JSON.stringify({ ...body, model }),

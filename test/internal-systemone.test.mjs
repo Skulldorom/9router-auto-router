@@ -24,7 +24,18 @@ test("internal System One dispatch defaults to the HTTP listener origin", async 
 
 test("internal System One dispatch accepts a deployment-specific internal origin", async () => {
   assert.equal(configuredOrigin({ NINE_ROUTER_INTERNAL_ORIGIN: "http://9router:20128/base/ignored" }), "http://9router:20128");
-  assert.equal(configuredOrigin({ NINE_ROUTER_INTERNAL_ORIGIN: "not a URL", PORT: "3010" }), "http://127.0.0.1:3010");
+  assert.equal(configuredOrigin({ PORT: "3010" }), "http://127.0.0.1:3010");
+  assert.equal(configuredOrigin({ NINE_ROUTER_INTERNAL_ORIGIN: "  ", PORT: "3010" }), "http://127.0.0.1:3010");
+});
+
+test("internal System One dispatch rejects malformed and unsupported explicit origins", async () => {
+  for (const origin of ["not a URL", "ftp://9router:20128"]) {
+    assert.throws(() => configuredOrigin({ NINE_ROUTER_INTERNAL_ORIGIN: origin, PORT: "3010" }), (error) => error.message === "systemone-invalid-origin");
+  }
+  await assert.rejects(
+    dispatchInternalSystemOne({ env: { NINE_ROUTER_INTERNAL_ORIGIN: "ftp://9router:20128" }, fetchImpl: async () => new Response() }),
+    (error) => error.message === "systemone-invalid-origin",
+  );
 });
 
 test("internal System One dispatch reports sanitized network and HTTP failures", async () => {

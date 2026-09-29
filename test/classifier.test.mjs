@@ -682,6 +682,7 @@ test("Jev failure maps hard local classification to the strongest candidate", as
 
 test("Jev fallback logs sanitized network, HTTP, and invalid-response failure stages", async () => {
   for (const [error, stage] of [
+    [new Error("systemone-invalid-origin"), "internal-invalid-origin"],
     [new Error("systemone-network"), "internal-network"],
     [new Error("systemone-http-503"), "internal-systemone-http status=503"],
     [new Error("invalid-output"), "invalid-decision-response"],

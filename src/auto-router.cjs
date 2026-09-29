@@ -437,6 +437,7 @@ function failureReason(error) {
 function jevFailureStage(error) {
   const message = error instanceof Error ? error.message : String(error);
   if (message === "timeout") return "timeout";
+  if (message === "systemone-invalid-origin") return "internal-invalid-origin";
   if (message === "systemone-network") return "internal-network";
   if (/^systemone-http-(?:[1-5]\d\d|unknown)$/.test(message)) return `internal-systemone-http status=${message.slice("systemone-http-".length)}`;
   if (message === "invalid-response" || message === "invalid-output" || message === "invalid-candidate") return "invalid-decision-response";
