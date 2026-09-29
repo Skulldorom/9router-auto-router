@@ -103,17 +103,9 @@ Point any OpenAI-compatible client at 9Router as usual and use the Auto Router c
 model: coder-auto
 ```
 
-Local now decides whether each request should go to `coder` or `coder-high`; Jev selects from its ordered candidate list. Everything after that decision is normal 9Router routing.
+Local and Jev independently route every request through the complete ordered model list. Everything after that decision is normal 9Router routing.
 
-Jev Sticky + Upgrade requires an API-key-scoped client identity and a stable conversation identity. The preferred client integration is the client-agnostic canonical header:
-
-```text
-X-9Router-Conversation-ID: <opaque stable conversation ID>
-```
-
-Header names are case-insensitive. `X-Conversation-ID`, `X-Session-ID`, and `X-Thread-ID` are also supported. For compatible request bodies, 9Router recognizes top-level `conversation_id`/`conversationId`, `session_id`/`sessionId`, and `thread_id`/`threadId`; nested `conversation.id`, `session.id`, or `thread.id`; and the same six fields in `metadata`.
-
-Sticky selections are scoped to the combo, a hashed API-key-scoped client identity, and a hashed resolved conversation identity. Raw Authorization values and raw conversation identifiers are neither logged nor persisted in sticky or pending cache keys. Clients without a supported conversation identity remain stateless for Jev routing.
+Concurrent identical Jev decisions may be coalesced while pending. Coalescing is isolated by combo, a hashed API-key-scoped client identity, a hashed conversation identity when supplied, the candidate configuration, and a sanitized request fingerprint. Raw Authorization values and raw conversation identifiers are neither logged nor persisted in pending keys. Completed requests never retain a selected tier, so later turns can downgrade or upgrade independently.
 
 ## How it works
 
@@ -271,7 +263,7 @@ For **Jev**, every configured model is a candidate and must be ordered from chea
 
 Jev tries the primary decision model first and the optional fallback only when the primary is unusable. All attempts share one overall timeout; when the chain is exhausted, routing uses the complete ordered Local target list.
 
-`jev.timeoutMs` controls how long Auto Router waits for the System One decision. On timeout, Auto Router aborts its local fetch to `/api/v1/systemone` and takes the existing fallback or sticky-route path. Current 9Router releases do not propagate that request signal through the System One handler to its provider fetch, so this is best-effort local cancellation, not a guarantee that the provider request stops or avoids usage.
+`jev.timeoutMs` controls how long Auto Router waits for the System One decision. On timeout, Auto Router aborts its local fetch to `/api/v1/systemone` and takes the Local fallback path. Current 9Router releases do not propagate that request signal through the System One handler to its provider fetch, so this is best-effort local cancellation, not a guarantee that the provider request stops or avoids usage.
 
 Jev dispatches to the internal HTTP listener at `http://127.0.0.1:${PORT:-20128}` rather than the external request origin, so HTTPS reverse proxies cannot change its internal transport. Set `NINE_ROUTER_INTERNAL_ORIGIN` to an `http:` or `https:` origin only when the 9Router listener is reached through a different internal service address. An unset or empty value uses the loopback default; a non-empty malformed or unsupported value fails the JEV decision with a sanitized configuration diagnostic before taking the normal local fallback. The incoming 9Router `Authorization` header is forwarded only to satisfy 9Router API-key authentication; provider credentials remain resolved inside the System One handler.
 
@@ -501,7 +493,7 @@ docker build \
 
 The test suite covers deterministic classification, false-positive regressions, routing, target validation, configuration precedence, UI integration, semantic/structural upstream discovery, persistence, runtime behavior, and the patched-container HTTP request path.
 
-`./scripts/auto-router-pipeline-parity-test.sh 9router-auto-router:local` sends one realistic 62-message, 83-tool OpenHands-style payload directly to `coder-high` and through `coder-auto` configured to select `coder-high`. Deterministic local Headroom and provider services capture both paths and require byte-identical target-provider bodies, Headroom input/output, RTK output, message/tool sizes, stream behavior, fallback/sticky combo handling, and format conversion. The direct `POST coder-high → provider` versus delegated `POST provider → provider` label is request logging identity; the captured target pipeline is identical.
+`./scripts/auto-router-pipeline-parity-test.sh 9router-auto-router:local` sends one realistic 62-message, 83-tool OpenHands-style payload directly to `coder-high` and through `coder-auto` configured to select `coder-high`. Deterministic local Headroom and provider services capture both paths and require byte-identical target-provider bodies, Headroom input/output, RTK output, message/tool sizes, stream behavior, fallback combo handling, and format conversion. The direct `POST coder-high → provider` versus delegated `POST provider → provider` label is request logging identity; the captured target pipeline is identical.
 
 Compatibility failures report the relevant image, candidate information, expected semantic structures, and failure reason without dumping minified source.
 
