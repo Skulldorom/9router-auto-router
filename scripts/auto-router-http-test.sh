@@ -144,10 +144,11 @@ fallback_response=$(complete '{"model":"agent","messages":[{"role":"user","conte
 printf '%s' "$fallback_response" | grep -q 'mock' || { echo "Ordinary fallback target failed: ${fallback_response}" >&2; exit 1; }
 [ "$(count_model fallback-combo-model)" -eq 1 ] || { echo "Ordinary fallback target was not executed normally." >&2; exit 1; }
 
-# Jev always ranks the complete ordered model list. Dormant legacy targets must not
-# substitute an unordered fallback target when the decision chain is exhausted.
+# Jev always ranks the complete ordered model list. A deliberately invalid decision
+# model deterministically exercises the final Local fallback; dormant legacy targets
+# must not substitute an unordered fallback target when that decision fails.
 set_models '["easy","mid","hard"]'
-set_auto '{"method":"jev","easyTarget":"fallback-combo","hardTarget":"mid","jev":{"decisionModel":"oc/jev-1.13-free"}}'
+set_auto '{"method":"jev","easyTarget":"fallback-combo","hardTarget":"mid","jev":{"decisionModel":"oc/invalid-jev-decision-model"}}'
 jev_fallback=$(complete '{"model":"agent","messages":[{"role":"user","content":"fully audit this repository concurrency race condition sentinel-jev-fallback"}]}')
 printf '%s' "$jev_fallback" | grep -q 'mock' || { echo "Jev fallback request did not reach the provider path: ${jev_fallback}" >&2; exit 1; }
 [ "$(count_model hard-model)" -eq 3 ] || { echo "Jev local fallback ignored the ordered strongest rank." >&2; journal >&2; exit 1; }
