@@ -369,8 +369,8 @@ function selectLocalRank({ escalationScore, candidateCount, hardThreshold }) {
 function localTargetLabel(index, candidateCount) {
   return candidateCount === 2 ? index === 0 ? "Easy" : "Hard" : `Local rank ${index + 1}`;
 }
-function selectRoute(body, comboName, { env = process.env, comboStrategies = {}, globalStrategy = "fallback", knownCombos, models } = {}) {
-  const persisted = comboStrategies?.[comboName]?.autoRouter, legacy = legacyTargets(persisted);
+function selectRoute(body, comboName, { env = process.env, comboStrategies = {}, globalStrategy = "fallback", knownCombos, models, ignoreLegacyTargets = false } = {}) {
+  const persisted = comboStrategies?.[comboName]?.autoRouter, legacy = ignoreLegacyTargets ? null : legacyTargets(persisted);
   const targets = legacy || effectiveTargets(models);
   if (new Set(targets).size !== targets.length) throw new Error("requires one or more distinct usable ordered models.");
   const config = { ...getConfig(env, persisted), easyTarget: targets[0], hardTarget: targets[1] || targets[0] }, classification = classifyTaskComplexity(body, config);
@@ -493,7 +493,9 @@ async function selectJevRoute({ body, comboName, comboStrategies, globalStrategy
     throw error;
   }
 }
-function selectJevFallbackRoute(body, comboName, options = {}) { return selectRoute(body, comboName, options); }
+// Jev candidates are always the ordered combo models, so an exhausted decision chain must
+// rank the same list. Dormant legacy targets belong to Local classification only.
+function selectJevFallbackRoute(body, comboName, options = {}) { return selectRoute(body, comboName, { ...options, ignoreLegacyTargets: true }); }
 const CONVERSATION_FIELDS = ["conversation_id", "conversationId", "session_id", "sessionId", "thread_id", "threadId"];
 const CONVERSATION_HEADERS = ["x-9router-conversation-id", "x-conversation-id", "x-session-id", "x-thread-id"];
 function conversationValue(value) { return nonEmptyString(value) && value.trim().length <= 256 ? value.trim() : null; }

@@ -29,7 +29,7 @@ OpenHands / Client
 Auto Router selects **one** target combo and delegates the request back to normal 9Router processing. The routing method is configured per Auto Router combo:
 
 - **Local classifier** performs a fast, deterministic local complexity check. It makes no additional model call and sends no prompt externally for classification.
-- **Jev** calls the configured System One decision model with bounded, sanitized decision context. That request incurs the configured provider's applicable usage and cost; Sticky + Upgrade reduces repeated decision calls.
+- **Jev** calls the configured System One decision model with bounded, sanitized decision context. That request incurs the configured provider's applicable usage and cost; concurrent equivalent decisions may share one in-flight call.
 
 Your providers, accounts, quotas, fallback chains, Round Robin configuration, streaming, tools, models, and provider execution remain managed by 9Router.
 

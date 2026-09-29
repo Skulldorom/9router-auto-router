@@ -89,7 +89,7 @@ test("rollback browser regression attaches stdin, verifies execution markers, an
   assert.match(rollback, /autoCard\(\)\.locator\("select"\)\.selectOption\(nextStrategy\)/);
   assert.match(rollback, /autoCard\(\)\.locator\("select"\)\.selectOption\("auto"\)/);
   assert.match(rollback, /Edit Combo retained a Strategy selector/);
-  assert.match(rollback, /did not label ordered model target as/);
+  assert.match(rollback, /did not label ordered model tier as/);
   assert.match(rollback, /Legacy targets remain effective until this model order is saved/);
   assert.match(rollback, /!\("easyTarget" in config\)/);
   assert.match(rollback, /did not initialize model order from legacy routing/);
