@@ -84,14 +84,14 @@ Open **Edit Combo** and select the routing method.
 For **Local**, arrange the Models list:
 
 ```text
-1  coder        Easy
-2  coder-high   Hard
-3  backup       Ignored
+1  coder-lite   Lowest tier
+2  coder        Intermediate tier
+3  coder-high   Strongest tier
 ```
 
-Local uses position 1 for Easy, position 2 for Hard, and ignores models after position 2. Reorder the list to change targets.
+Local and Jev use the complete ordered list, from easiest to strongest. Local preserves Easy/Hard behavior for exactly two targets and maps its escalation score to ranks for longer lists. Reorder the list to change targets.
 
-For **Jev**, all configured models are candidates. Order them from cheapest/lower capability to strongest/higher capability; the configured System One decision model selects the lowest sufficient candidate. **Advanced** contains classifier tuning, Jev's decision model and timeout, and verbose logging.
+For **Jev**, all configured models are candidates. Order them from cheapest/lower capability to strongest/higher capability; the primary System One decision model selects the lowest sufficient candidate, and an optional fallback System One model is tried when the primary fails. **Advanced** contains classifier tuning, Jev's timeout, and verbose logging.
 
 Strategy selection stays on the combo card. Auto Router details stay in **Edit Combo**. No `AUTO_ROUTER_*` environment variables are required for normal setup.
 
@@ -231,7 +231,7 @@ Every routing decision can log the combo, level, selected target, bounded public
 
 Most users should configure Auto Router entirely through the normal 9Router UI.
 
-For **Local**, ordered `models` are targets: `models[0]` is Easy, `models[1]` is Hard, and later models are ignored.
+For **Local**, ordered `models` are targets ranked from easiest to strongest. A one-model list always selects that model; a two-model list preserves the Easy/Hard threshold behavior; lists with three or more models use the uncapped Local escalation score to select any reachable rank.
 
 ```json
 {
@@ -250,7 +250,7 @@ For **Local**, ordered `models` are targets: `models[0]` is Easy, `models[1]` is
 }
 ```
 
-For **Jev**, every configured model is a candidate and must be ordered from cheapest/lower capability to strongest/higher capability. Its persisted form includes the System One decision model and wait timeout:
+For **Jev**, every configured model is a candidate and must be ordered from cheapest/lower capability to strongest/higher capability. Configure one primary decision model or an optional ordered fallback pair. Legacy `decisionModel` values migrate to a one-element `decisionModels` list:
 
 ```json
 {
@@ -260,7 +260,7 @@ For **Jev**, every configured model is a candidate and must be ordered from chea
       "autoRouter": {
         "method": "jev",
         "jev": {
-          "decisionModel": "<system-one-model>",
+          "decisionModels": ["<primary-system-one-model>", "<optional-fallback-system-one-model>"],
           "timeoutMs": 1500
         }
       }
@@ -268,6 +268,8 @@ For **Jev**, every configured model is a candidate and must be ordered from chea
   }
 }
 ```
+
+Jev tries the primary decision model first and the optional fallback only when the primary is unusable. All attempts share one overall timeout; when the chain is exhausted, routing uses the complete ordered Local target list.
 
 `jev.timeoutMs` controls how long Auto Router waits for the System One decision. On timeout, Auto Router aborts its local fetch to `/api/v1/systemone` and takes the existing fallback or sticky-route path. Current 9Router releases do not propagate that request signal through the System One handler to its provider fetch, so this is best-effort local cancellation, not a guarantee that the provider request stops or avoids usage.
 
@@ -294,7 +296,7 @@ Invalid or missing values fall through to the next source.
 
 ### Target rules
 
-Both methods require at least two distinct usable models. Local uses only the first two; Jev uses all ordered models as candidates. The runtime returns a controlled configuration error for zero, one, duplicate, or malformed targets. Reordering Models changes the effective targets on the next saved combo.
+Both methods require one or more distinct usable models and use the complete ordered list. Local preserves Easy/Hard behavior when exactly two models are configured, while Jev selects a rank directly. The runtime returns a controlled configuration error for zero, duplicate, or malformed targets. Reordering Models changes the effective targets on the next saved combo.
 
 Auto Router → Auto Router chaining is intentionally unsupported. Runtime validation independently rejects self-references and Auto Router targets before delegation. A per-request re-entry guard remains as defense-in-depth.
 

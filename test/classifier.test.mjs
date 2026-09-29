@@ -89,7 +89,7 @@ test("nested request wrappers use their canonical tool or function collection", 
 test("numeric configuration accepts documented boundaries and rejects adjacent values", () => {
   const fields = Object.entries(router.NUMERIC_BOUNDS).filter(([key]) => key !== "jevTimeoutMs");
   const explicit = Object.fromEntries(fields.map(([key, bounds]) => [key, bounds.max]));
-  assert.deepEqual(router.getConfig({}, explicit), { ...Object.fromEntries(Object.entries(router.DEFAULTS).filter(([key]) => key !== "jevTimeoutMs")), ...explicit, method: "local", jev: { decisionModel: null, timeoutMs: router.DEFAULTS.jevTimeoutMs } });
+  assert.deepEqual(router.getConfig({}, explicit), { ...Object.fromEntries(Object.entries(router.DEFAULTS).filter(([key]) => key !== "jevTimeoutMs")), ...explicit, method: "local", jev: { decisionModel: null, decisionModels: [], timeoutMs: router.DEFAULTS.jevTimeoutMs } });
   assert.equal(router.getConfig({}, { jev: { timeoutMs: router.NUMERIC_BOUNDS.jevTimeoutMs.max } }).jev.timeoutMs, router.NUMERIC_BOUNDS.jevTimeoutMs.max);
 
   for (const [key, { min, max }] of fields) {
@@ -365,7 +365,7 @@ test("verbose routing logs structured decisions without request text", async () 
     delegate: () => new Response("ok"),
   });
   assert.equal(response.status, 200);
-  assert.ok(entries.some((entry) => /combo=coder-auto level=easy target=coder score=\d+ reasons=/.test(entry)));
+  assert.ok(entries.some((entry) => /combo=coder-auto method=local rank=1\/2 score=\d+ target=coder reasons=/.test(entry)));
   assert.ok(entries.some((entry) => /combo=coder-auto metadata=/.test(entry)));
   assert.ok(entries.every((entry) => !entry.includes(prompt)));
 });
@@ -408,7 +408,7 @@ test("invalid explicit numeric values fall back to valid legacy values", () => {
 
 test("invalid per-combo fields independently fall back to valid legacy values", () => {
   const config = router.getConfig({ AUTO_ROUTER_EASY_TARGET: "env-easy", AUTO_ROUTER_HARD_TARGET: "env-hard", AUTO_ROUTER_HARD_THRESHOLD: "8", AUTO_ROUTER_LONG_CONTEXT_CHARS: "28000", AUTO_ROUTER_LARGE_TOOL_RESULT_CHARS: "14000", AUTO_ROUTER_MANY_TOOLS: "18", AUTO_ROUTER_VERBOSE: "true" }, { easyTarget: " ", hardTarget: null, hardThreshold: -1, longContextChars: "bad", largeToolResultChars: 0, manyTools: 1.5, verbose: "invalid" });
-  assert.deepEqual(config, { easyTarget: "env-easy", hardTarget: "env-hard", hardThreshold: 8, longContextChars: 28000, largeToolResultChars: 14000, verbose: true, method: "local", jev: { decisionModel: null, timeoutMs: router.DEFAULTS.jevTimeoutMs } });
+  assert.deepEqual(config, { easyTarget: "env-easy", hardTarget: "env-hard", hardThreshold: 8, longContextChars: 28000, largeToolResultChars: 14000, verbose: true, method: "local", jev: { decisionModel: null, decisionModels: [], timeoutMs: router.DEFAULTS.jevTimeoutMs } });
   assert.ok(!Object.hasOwn(config, "manyTools"));
 });
 
@@ -532,25 +532,26 @@ test("cloned delegation cannot bypass static Auto Router protection", async () =
 });
 
 
-test("model order is the Auto Router target source", () => {
+test("Local routing resolves every ordered model tier while retaining two-tier thresholds", () => {
   const easy = message("hello"), hard = message("fully audit this");
+  assert.equal(selectConfiguredRoute(easy, "auto", { models: ["only"] }).target, "only");
   assert.equal(selectConfiguredRoute(easy, "auto", { models: ["easy", "hard"] }).target, "easy");
-  assert.equal(selectConfiguredRoute(hard, "auto", { models: ["easy", "hard", "ignored"] }).target, "hard");
-  assert.equal(selectConfiguredRoute(easy, "auto", { models: ["hard", "easy", "ignored"] }).target, "hard");
-  assert.equal(selectConfiguredRoute(hard, "auto", { models: ["replacement", "hard"] }).target, "hard");
-  assert.equal(selectConfiguredRoute(easy, "auto", { models: ["replacement", "hard"] }).target, "replacement");
-  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: [] }), /requires two distinct usable models/);
-  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: ["only"] }), /requires two distinct usable models/);
-  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: ["same", "same"] }), /requires two distinct usable models/);
+  assert.equal(selectConfiguredRoute(hard, "auto", { models: ["easy", "hard"] }).target, "hard");
+  assert.equal(selectConfiguredRoute(hard, "auto", { models: ["easy", "middle", "strong"] }).target, "middle");
+  assert.equal(selectConfiguredRoute(message("Fully audit this repository concurrency race condition."), "auto", { models: ["one", "two", "three", "four", "five"] }).target, "three");
+  assert.equal(selectConfiguredRoute(message("Fully audit this repository concurrency race condition."), "auto", { models: ["one", "two", "three", "four", "five"], comboStrategies: { auto: { autoRouter: { hardThreshold: 3 } } } }).target, "five");
+  assert.deepEqual([0, 0, 1, 2, 4], [0, 5, 6, 12, 1000].map((escalationScore) => router.selectLocalRank({ escalationScore, candidateCount: 5, hardThreshold: 6 })));
+  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: [] }), /one or more distinct usable ordered models/);
+  assert.throws(() => selectConfiguredRoute(easy, "auto", { models: ["same", "same"] }), /one or more distinct usable ordered models/);
 });
 test("legacy target configuration remains effective until UI normalization", () => {
   const persisted = { auto: { fallbackStrategy: "auto", autoRouter: { easyTarget: "legacy-easy", hardTarget: "legacy-hard", hardThreshold: 1 } } };
   const legacy = selectConfiguredRoute(message("fully audit this"), "auto", { models: ["new-easy", "new-hard"], comboStrategies: persisted });
   assert.equal(legacy.target, "legacy-hard"); assert.equal(legacy.config.easyTarget, "legacy-easy");
   const normalized = selectConfiguredRoute(message("fully audit this"), "auto", { models: ["legacy-easy", "legacy-hard", "new-easy", "new-hard"], comboStrategies: { auto: { fallbackStrategy: "auto", autoRouter: { hardThreshold: 1 } } } });
-  assert.equal(normalized.target, "legacy-hard"); assert.equal(normalized.config.easyTarget, "legacy-easy");
+  assert.equal(normalized.target, "new-hard"); assert.equal(normalized.config.easyTarget, "legacy-easy");
 });
-test("missing ordered models return a controlled runtime configuration error", async () => { const response = await router.routeAutoCombo({ body: message("hello"), comboName: "auto", comboStrategies: {}, models: ["only"], log: { info() {}, warn() {} }, delegate: () => new Response("unexpected") }); assert.equal(response.status, 400); assert.match((await response.json()).error.message, /requires two distinct usable models/); });
+test("missing ordered models return a controlled runtime configuration error", async () => { const response = await router.routeAutoCombo({ body: message("hello"), comboName: "auto", comboStrategies: {}, models: [], log: { info() {}, warn() {} }, delegate: () => new Response("unexpected") }); assert.equal(response.status, 400); assert.match((await response.json()).error.message, /one or more distinct usable ordered models/); });
 
 test("Jev sends a native System One choice request and delegates its validated selection", async () => {
   const delegated = [], requests = [];
@@ -592,6 +593,16 @@ test("Jev failures safely fall back to the unchanged local classifier", async ()
   }
 });
 
+test("Jev migrates legacy primary configuration and rejects invalid fallback configuration", async () => {
+  assert.deepEqual(router.getConfig({}, { method: "jev", jev: { decisionModel: "primary" } }).jev.decisionModels, ["primary"]);
+  assert.deepEqual(router.getConfig({}, { method: "jev", jev: { decisionModels: ["primary", "fallback"] } }).jev.decisionModels, ["primary", "fallback"]);
+  const base = { body: message("Rename one label."), comboName: "auto", models: ["cheap", "strong"], log: { info() {}, warn() {} }, decide: async () => ({ answers: { candidate: { type: "choice", choice: "candidate_1" } } }), delegate: () => new Response("unexpected") };
+  for (const jev of [{ decisionModels: ["primary", "fallback", "third"] }, { decisionModels: ["primary", ""] }, { decisionModels: ["primary", "primary"] }]) {
+    const response = await router.routeAutoCombo({ ...base, comboStrategies: { auto: { autoRouter: { method: "jev", jev } } } });
+    assert.equal(response.status, 400);
+  }
+});
+
 test("Jev timeout aborts the local decision and releases pending selection state", async () => {
   const timers = { scheduled: [], cleared: [], setTimeout(callback) { this.scheduled.push(callback); return this.scheduled.length; }, clearTimeout(id) { this.cleared.push(id); } };
   let completedSignal;
@@ -629,7 +640,7 @@ test("Jev timeout aborts the local decision and releases pending selection state
 });
 
 test("Jev validates candidate pools and sanitizes bounded native System One requests", () => {
-  assert.throws(() => router.jevCandidates(["a"]), /at least two/);
+  assert.deepEqual(router.jevCandidates(["a"]), ["a"]);
   assert.throws(() => router.jevCandidates(["a", "a"]), /distinct/);
   assert.throws(() => router.jevCandidates(Array.from({ length: 256 }, (_, index) => `model-${index}`)), /at most 255/);
   const request = router.jevRequest({ messages: [{ role: "system", content: "secret-system" }, { role: "user", content: "x".repeat(6000) }], tools: [{ function: { name: "secret-tool", description: "x".repeat(50000) } }] }, ["cheap", "strong"]);
@@ -675,8 +686,8 @@ test("Jev failure maps hard local classification to the strongest candidate", as
     delegate: async (_body, target) => { calls.push(target); return "delegated"; },
   });
   assert.equal(response, "delegated");
-  assert.deepEqual(calls, ["premium"]);
-  assert.match(logs.at(-1), /method=jev selected=premium source=local-fallback reason=decision-error/);
+  assert.deepEqual(calls, ["standard"]);
+  assert.match(logs.at(-1), /method=jev selected=standard rank=2\/3 source=local-fallback reason=decision-error/);
 });
 
 
@@ -699,6 +710,57 @@ test("Jev fallback logs sanitized network, HTTP, and invalid-response failure st
     assert.ok(logs.some((line) => line.includes(`source=local-fallback reason=${error.message === "invalid-output" ? "invalid-output" : "decision-error"}`)));
     assert.ok(logs.every((line) => !line.includes(secret)));
   }
+});
+
+
+test("Jev decision models form an optional ordered fallback chain", async () => {
+  const calls = [], logs = [];
+  const base = {
+    body: message("Rename one label."), comboName: "auto", models: ["cheap", "strong"],
+    comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModels: ["primary", "fallback"] } } } },
+    log: { info: (...entry) => logs.push(entry.join(" ")), warn: (...entry) => logs.push(entry.join(" ")) },
+    delegate: (_body, target) => new Response(target),
+  };
+  const fallback = await router.routeAutoCombo({ ...base, decide: async (_request, model) => { calls.push(model); if (model === "primary") throw new Error("quota"); return { answers: { candidate: { type: "choice", choice: "candidate_2" } } }; } });
+  assert.equal(await fallback.text(), "strong");
+  assert.deepEqual(calls, ["primary", "fallback"]);
+  assert.ok(logs.some((line) => line.includes("decision_model=primary") && line.includes("decision_failure")));
+  assert.ok(logs.some((line) => line.includes("decision_model=fallback") && line.includes("rank=2/2")));
+
+  calls.length = 0;
+  const primary = await router.routeAutoCombo({ ...base, body: message("Rename another label."), decide: async (_request, model) => { calls.push(model); return { answers: { candidate: { type: "choice", choice: "candidate_1" } } }; } });
+  assert.equal(await primary.text(), "cheap");
+  assert.deepEqual(calls, ["primary"]);
+
+  const local = await router.routeAutoCombo({ ...base, body: message("Fully audit this repository concurrency race condition."), comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModels: ["primary"] } } } }, decide: async () => { throw new Error("unavailable"); } });
+  assert.equal(await local.text(), "strong");
+});
+
+test("Jev fallback shares a single decision deadline", async () => {
+  const calls = [];
+  const started = Date.now();
+  const response = await router.routeAutoCombo({
+    body: message("Rename one label."), comboName: "auto", models: ["cheap", "strong"],
+    comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModels: ["primary", "fallback"], timeoutMs: 100 } } } },
+    log: { info() {}, warn() {} },
+    decide: async (_request, model) => {
+      calls.push(model);
+      if (model === "primary") { await new Promise((resolve) => setTimeout(resolve, 60)); throw new Error("provider error"); }
+      return { answers: { candidate: { type: "choice", choice: "candidate_2" } } };
+    }, delegate: (_body, target) => new Response(target),
+  });
+  assert.equal(await response.text(), "strong");
+  assert.deepEqual(calls, ["primary", "fallback"]);
+  assert.ok(Date.now() - started < 100, "fallback did not receive a fresh timeout budget");
+});
+
+test("Jev fallback chain participates in sticky no-downgrade routing", async () => {
+  const body = stickyBody("Rename one label.", "fallback-sticky"), models = ["cheap", "coder", "strong", "premium"];
+  const config = { auto: { autoRouter: { method: "jev", jev: { decisionModels: ["primary", "fallback"] } } } };
+  const first = await router.routeAutoCombo({ body, comboName: "auto", models, comboStrategies: config, clientIdentity: "Bearer chain", now: 1, log: { info() {}, warn() {} }, decide: async () => ({ answers: { candidate: { type: "choice", choice: "candidate_4" } } }), delegate: (_body, target) => new Response(target) });
+  assert.equal(await first.text(), "premium");
+  const next = await router.routeAutoCombo({ body: stickyBody("Rename another label.", "fallback-sticky"), comboName: "auto", models, comboStrategies: config, clientIdentity: "Bearer chain", now: 2, log: { info() {}, warn() {} }, decide: async () => ({ answers: { candidate: { type: "choice", choice: "candidate_1" } } }), delegate: (_body, target) => new Response(target) });
+  assert.equal(await next.text(), "premium");
 });
 
 test("Jev rejects self-referencing and Auto Router candidates", async () => {
@@ -816,8 +878,8 @@ test("Jev initial and upgrade failures preserve safe sticky routes", async () =>
   const fallback = async () => { initialCalls += 1; throw new Error("provider down"); };
   const hard = await stickyRoute({ body: stickyBody("Fully audit this repository concurrency race condition.", "initial-failure"), decide: fallback, now: 500 });
   const repeat = await stickyRoute({ body: stickyBody("Rename one label.", "initial-failure"), decide: fallback, now: 501 });
-  assert.equal(await hard.text(), "premium");
-  assert.equal(await repeat.text(), "premium");
+  assert.equal(await hard.text(), "coder-high");
+  assert.equal(await repeat.text(), "coder-high");
   assert.equal(initialCalls, 1);
 
   let calls = 0; const logs = [];

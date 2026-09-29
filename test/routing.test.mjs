@@ -164,8 +164,8 @@ test("combo card keeps every discovered strategy and appends Auto Router interac
 test("strategy option discovery preserves future upstream options", () => {
   const extra = `,{value:"adaptive",label:"Adaptive — tune per request"}`, server = serverUi.replace("let bI=[", "var bI = [").replace("}];function bJ", `}${extra}];function bJ`), client = clientUi.replace("let f1=[", "var f1 = [").replace("}];function g1", `}${extra}];function g1`), dir = fixture({ server, client }); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) assert.match(fs.readFileSync(file, "utf8"), /value:"adaptive",label:"Adaptive — tune per request"/);
 });
-test("Edit Combo labels ordered models without a Strategy or target selector", () => {
-  const dir = fixture(); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) { const modal = modalSection(fs.readFileSync(file, "utf8")); for (const label of ["Auto Router", "Easy", "Hard", "Ignored", "Advanced", "Hard threshold", "Long context threshold", "Large tool-result threshold", "Verbose logging"]) assert.ok(modal.includes(label)); for (const removed of ["\"Strategy\"", "Easy target", "Hard target", "availableCombos", "_arStrategyOptions"]) assert.ok(!modal.includes(removed), `modal retained ${removed}`); assert.match(modal, /0===index\?"Easy":1===index\?"Hard":"Ignored"/); assert.match(modal, /Models after position 2 are ignored by Auto Router/); assert.match(modal, /requires two distinct usable models in positions 1 \(Easy\) and 2 \(Hard\)/); }
+test("Edit Combo labels the complete ordered target list without a Strategy selector", () => {
+  const dir = fixture(); assert.equal(patch(dir).status, 0); for (const file of uiFiles(dir)) { const modal = modalSection(fs.readFileSync(file, "utf8")); for (const label of ["Auto Router", "Tier 1 · Lowest", "Advanced Settings", "Local classifier settings", "Hard threshold", "Long context threshold", "Large tool-result threshold", "Verbose logging"]) assert.ok(modal.includes(label)); for (const removed of ["\"Strategy\"", "Easy target", "Hard target", "availableCombos", "_arStrategyOptions", "Ignored"]) assert.ok(!modal.includes(removed), `modal retained ${removed}`); assert.match(modal, /0===index\?"Tier 1 · Lowest":index===.+?\.length-1\?"Tier "\+\(index\+1\)\+" · Strongest":"Tier "\+\(index\+1\)/); assert.match(modal, /Ordered models increase in capability from first to last\. Local and Jev both select from the complete list\./); assert.match(modal, /Auto Router requires one or more distinct ordered models/); }
 });
 test("legacy migration initializes visible model order from effective runtime targets", () => {
   const dir = fixture(); assert.equal(patch(dir).status, 0);
@@ -176,7 +176,8 @@ test("legacy migration initializes visible model order from effective runtime ta
     assert.match(modal, /_arEffectiveModels=_arLegacyMigration\?\[_arSavedConfig\.easyTarget\.trim\(\),_arSavedConfig\.hardTarget\.trim\(\),\.\.\._arStoredModels\.filter\(model=>typeof model!=="string"\|\|\(model\.trim\(\)!==_arSavedConfig\.easyTarget\.trim\(\)&&model\.trim\(\)!==_arSavedConfig\.hardTarget\.trim\(\)\)\)\]:null/);
     assert.match(modal, /_arLegacyMigration&&\(0,[A-Za-z_$][\w$]*\.jsx\)\("p",\{className:"text-text-muted",children:"Legacy targets remain effective until this model order is saved\."\}\)/);
     assert.match(modal, /_arEffectiveModels\|\|.+?\?\.models\|\|\[\]/);
-    assert.match(modal, /let _arTargets=[A-Za-z_$][\w$]*\.slice\(0,2\)\.map/);
+    assert.match(modal, /_arCandidates=[A-Za-z_$][\w$]*\.map/);
+    assert.match(modal, /_arDecisionModels=_arConfig\.jev\.decisionModels\.filter/);
     assert.match(modal, /let \{easyTarget:_arEasyTarget,hardTarget:_arHardTarget,manyTools:_arManyTools,\.\.\.config\}/);
     assert.match(modal, /"auto"===_arInitialStrategy\.fallbackStrategy\?\{autoRouter:config\}:null/);
     assert.match(patched, /let changed=\{\.\.\.original,\.\.\.comboData,models:comboData\.models\}/);
@@ -228,22 +229,21 @@ test("card strategy persistence keeps dormant Auto Router configuration", () => 
   }
 });
 
-test("Edit Combo renders both Auto Router methods and reuses the normal model picker for Jev", () => {
+test("Edit Combo renders primary and optional fallback Jev controls with Local settings", () => {
   const dir = fixture(); assert.equal(patch(dir).status, 0);
   for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) {
     const modal = modalSection(source);
-    for (const label of ["Routing method", "Local classifier", "Jev", "Jev decision model", "Tier 1 · Cheapest", "Advanced Jev settings", "Jev decision timeout (ms)"]) assert.ok(modal.includes(label));
-    assert.match(modal, /_arJevPicker&&\(0,[A-Za-z_$][\w$]*\.jsx\)\([A-Za-z_$][\w$]*,\{isOpen:_arJevPicker/);
+    for (const label of ["Routing method", "Local classifier", "Jev", "Primary Jev model", "Fallback Jev model (optional)", "Tier 1 · Lowest", "Advanced Settings", "Local classifier settings", "Jev-specific settings", "Jev decision timeout (ms)"]) assert.ok(modal.includes(label));
+    assert.match(modal, /_arJevPicker!==null&&\(0,[A-Za-z_$][\w$]*\.jsx\)\([A-Za-z_$][\w$]*,\{isOpen:!0/);
     assert.match(modal, /activeProviders:[A-Za-z_$][\w$]*/);
     assert.match(modal, /kindFilter:"systemone"/);
-    assert.match(modal, /onSelect:model=>\{let value=typeof model==="string"\?model:model\?\.value\|\|model\?\.id\|\|""/);
+    assert.match(modal, /decisionModels\[index\]=value,_arUpdate\("jev",\{\.\.\._arConfig\.jev,decisionModels:decisionModels\.filter\(Boolean\)\}\)/);
     assert.doesNotMatch(modal, /type:"text"[^}]*Jev decision model/);
-    assert.match(modal, /"jev"===_arConfig\.method\?\(0===index\?"Tier 1 · Cheapest"/);
-    assert.match(modal, /0===index\?"Easy":1===index\?"Hard":"Ignored"/);
+    assert.match(modal, /0===index\?"Tier 1 · Lowest":index===.+?\.length-1\?"Tier "\+\(index\+1\)\+" · Strongest":"Tier "\+\(index\+1\)/);
     assert.match(source, /next\.autoRouter=\{\.\.\.freshConfig,\.\.\.strategy\.autoRouter\}/);
   }
 });
-test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v9/); assert.equal(source.split("9router-auto-router-ui:v9").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });
+test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v10/); assert.equal(source.split("9router-auto-router-ui:v10").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });
 
 test("patcher extends the normal picker typed kinds for System One only", () => {
   const dir = fixture(); assert.equal(patch(dir).status, 0);
@@ -319,7 +319,7 @@ test("patcher transforms fixtures containing awkward strings, comments and templ
   assert.equal(result.status, 0, result.stderr);
   const patched = fs.readFileSync(uiFiles(dir)[0], "utf8");
   parses(patched);
-  assert.match(patched, /9router-auto-router-ui:v9/);
+  assert.match(patched, /9router-auto-router-ui:v10/);
 });
 
 test("patcher fails closed when the card strategy callback has extra side effects", () => {

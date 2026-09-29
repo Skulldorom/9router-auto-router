@@ -89,7 +89,7 @@ printf '%s' "$hard_response" | grep -q 'data: ' || { echo "Hard streaming reques
 
 [ "$(count_model easy-model)" -eq 1 ] || { echo "Expected exactly one easy-model provider call, saw $(count_model easy-model)." >&2; journal >&2; exit 1; }
 [ "$(count_model hard-model)" -eq 1 ] || { echo "Expected exactly one hard-model provider call, saw $(count_model hard-model)." >&2; journal >&2; exit 1; }
-[ "$(journal | grep -c '"url":"/api/chat"')" -eq 2 ] || { echo "Expected exactly two provider requests; models after position 2 must be ignored." >&2; journal >&2; exit 1; }
+[ "$(journal | grep -c '"url":"/api/chat"')" -eq 2 ] || { echo "Expected exactly two provider requests for this two-target Local fixture." >&2; journal >&2; exit 1; }
 
 easy_body=$(journal | grep -m1 'easy-model')
 hard_body=$(journal | grep -m1 'hard-model')
