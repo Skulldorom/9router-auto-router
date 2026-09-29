@@ -434,6 +434,18 @@ function failureReason(error) {
   const message = error instanceof Error ? error.message : String(error);
   return message === "timeout" || message === "invalid-output" || message === "invalid-candidate" || message === "missing-decision-model" ? message : "decision-error";
 }
+function jevFailureStage(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "timeout") return "timeout";
+  if (message === "systemone-invalid-origin") return "internal-invalid-origin";
+  if (message === "systemone-network") return "internal-network";
+  if (/^systemone-http-(?:[1-5]\d\d|unknown)$/.test(message)) return `internal-systemone-http status=${message.slice("systemone-http-".length)}`;
+  if (message === "invalid-response" || message === "invalid-output" || message === "invalid-candidate") return "invalid-decision-response";
+  return "decision-error";
+}
+function logJevFailure(log, comboName, error) {
+  log.warn("AUTO-ROUTER", `combo=${comboName} method=jev decision_failure stage=${jevFailureStage(error)}`);
+}
 function jevOptions(comboName, { comboStrategies = {}, globalStrategy = "fallback", models } = {}) {
   const persisted = comboStrategies?.[comboName]?.autoRouter;
   const config = getConfig(process.env, persisted), candidates = jevCandidates(models);
@@ -579,6 +591,7 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
               selected.classification = classification;
               return { route: selected, source: "jev-upgrade", failure: null };
             } catch (error) {
+              logJevFailure(log, comboName, error);
               sticky.escalationScore = classification.escalationScore;
               return { route: retained, source: "sticky", failure: failureReason(error) };
             }
@@ -595,6 +608,7 @@ async function routeAutoCombo({ body, comboName, comboStrategies, globalStrategy
             selected.classification = classifyTaskComplexity(body, prepared.config);
             return { route: selected, source: "jev", failure: null };
           } catch (error) {
+            logJevFailure(log, comboName, error);
             const fallbackFailure = failureReason(error);
             return { route: selectJevFallbackRoute(body, comboName, { comboStrategies, globalStrategy, models }), source: "local-fallback", failure: fallbackFailure };
           }

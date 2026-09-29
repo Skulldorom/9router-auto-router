@@ -22,6 +22,7 @@ LABEL org.opencontainers.image.source="https://github.com/Skulldorom/9router-aut
 
 COPY auto-router-config.cjs /opt/auto-router-config.cjs
 COPY src/auto-router.cjs /opt/9router-auto-router/auto-router.cjs
+COPY src/internal-systemone.cjs /opt/9router-auto-router/internal-systemone.cjs
 COPY patches/apply-patch.mjs /opt/9router-auto-router/apply-patch.mjs
 RUN node /opt/9router-auto-router/apply-patch.mjs /app && \
     chown -R node:node /opt/9router-auto-router

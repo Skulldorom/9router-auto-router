@@ -679,6 +679,28 @@ test("Jev failure maps hard local classification to the strongest candidate", as
   assert.match(logs.at(-1), /method=jev selected=premium source=local-fallback reason=decision-error/);
 });
 
+
+test("Jev fallback logs sanitized network, HTTP, and invalid-response failure stages", async () => {
+  for (const [error, stage] of [
+    [new Error("systemone-invalid-origin"), "internal-invalid-origin"],
+    [new Error("systemone-network"), "internal-network"],
+    [new Error("systemone-http-503"), "internal-systemone-http status=503"],
+    [new Error("invalid-output"), "invalid-decision-response"],
+  ]) {
+    const logs = [], secret = "Bearer private-client-token";
+    const response = await router.routeAutoCombo({
+      body: message(`request body must stay private ${secret}`), comboName: "auto", models: ["cheap", "premium"],
+      comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } },
+      log: { info: (...entry) => logs.push(entry.join(" ")), warn: (...entry) => logs.push(entry.join(" ")) },
+      decide: async () => { throw error; }, delegate: (_body, target) => new Response(target),
+    });
+    assert.equal(await response.text(), "cheap");
+    assert.ok(logs.some((line) => line.includes(`decision_failure stage=${stage}`)));
+    assert.ok(logs.some((line) => line.includes(`source=local-fallback reason=${error.message === "invalid-output" ? "invalid-output" : "decision-error"}`)));
+    assert.ok(logs.every((line) => !line.includes(secret)));
+  }
+});
+
 test("Jev rejects self-referencing and Auto Router candidates", async () => {
   const base = { body: message("hello"), comboName: "auto", log: { info() {}, warn() {} }, decide: async () => ({ answers: { candidate: { choice: "candidate_1" } } }), delegate: () => new Response("unexpected") };
   const self = await router.routeAutoCombo({ ...base, models: ["auto", "ordinary"], comboStrategies: { auto: { autoRouter: { method: "jev", jev: { decisionModel: "judge" } } } } });
