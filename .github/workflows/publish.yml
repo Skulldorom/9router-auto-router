@@ -229,8 +229,8 @@ jobs:
           # Auto Router version. Only the resolver may create it, and only when this
           # revision introduced the version (never for scheduled/retried rebuilds).
           [ "$CREATE_TAG" = "true" ] || exit 0
-          git config user.name "openhands"
-          git config user.email "openhands@all-hands.dev"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch --tags origin
           existing_tag_sha=$(git rev-parse --verify --quiet "refs/tags/v${AUTO_ROUTER_VERSION}^{commit}" || true)
           if [ -n "$existing_tag_sha" ]; then
@@ -363,8 +363,8 @@ jobs:
             echo 'commit=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git config user.name "openhands"
-          git config user.email "openhands@all-hands.dev"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "chore: record known-good versions auto-router v${AUTO_ROUTER_VERSION} / 9router v${UPSTREAM_VERSION}"
           echo 'commit=true' >> "$GITHUB_OUTPUT"
       # Even though the guard above re-checks ownership, a commit could still land in
