@@ -216,6 +216,11 @@ function discoverUiCandidates() {
 // exactly the typed model kinds (optionally already including System One). Matching on the
 // parsed AST keeps whitespace, quote style, member order and trailing commas irrelevant while
 // still rejecting any set that adds, drops, or duplicates a kind.
+// Deliberately binding-agnostic: the set must be the picker's kind list, but is not proven to
+// feed filterByKind. Tracing that binding would have to accept every shape upstream may emit
+// (variable-bound, inline, aliased); each missed shape fails a legitimate upstream closed,
+// while the false positive it guards against needs an unrelated set of these exact model-kind
+// strings in the same bundle.
 function pickerTypedKindSets(source, target) {
   const ast = parseJavaScript(source, target);
   const identifiers = new Set();
