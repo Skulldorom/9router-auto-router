@@ -10,7 +10,12 @@ const checkOnly = process.argv.includes("--check");
 const runtimeMarker = "9router-auto-router:v3";
 const uiMarker = "9router-auto-router-ui:v10";
 const pickerMarker = "9router-auto-router-systemone-picker:v1";
-const typedKindsPattern = /new Set\(\["image","tts","stt","embedding","imageToText"\]\)/;
+// Upstream's ModelSelectModal declares TYPED_KINDS as a Set of string literals and gates
+// filterByKind on it. The recognised shape is that Set: the media kinds 9Router has always
+// filtered on, optionally already carrying the System One kind (upstream 0.5.109 native).
+// Anything else — a different member, a missing kind, a duplicated Set — stays rejected.
+const pickerTypedKinds = Object.freeze(["image", "tts", "stt", "embedding", "imageToText"]);
+const pickerSystemOneKind = "systemone";
 const numericBounds = Object.freeze(Object.fromEntries(Object.entries(NUMERIC_BOUNDS).map(([key, { min, max }]) => [key, Object.freeze([min, max])])));
 
 function count(source, needle) { return source.split(needle).length - 1; }
@@ -207,28 +212,62 @@ function discoverUiCandidates() {
   if (candidates.length !== 2) fail(`Combo UI strategy asset candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  Group models under one name`);
   return candidates;
 }
+// Collect every `new Set([...])` whose members are string literals and whose membership is
+// exactly the typed model kinds (optionally already including System One). Matching on the
+// parsed AST keeps whitespace, quote style, member order and trailing commas irrelevant while
+// still rejecting any set that adds, drops, or duplicates a kind.
+function pickerTypedKindSets(source, target) {
+  const ast = parseJavaScript(source, target);
+  const identifiers = new Set();
+  const found = [];
+  walkAst(ast, null, (node) => {
+    if (node.type === "Identifier") { identifiers.add(node.name); return; }
+    if (node.type !== "NewExpression" || identifier(node.callee) !== "Set") return;
+    const [argument] = node.arguments;
+    if (argument?.type !== "ArrayExpression") return;
+    const members = argument.elements.map((element) => (element?.type === "Literal" && typeof element.value === "string" ? element.value : null));
+    if (members.includes(null) || new Set(members).size !== members.length) return;
+    const expected = new Set(pickerTypedKinds);
+    const extras = members.filter((member) => !expected.has(member));
+    if (extras.length > 1 || (extras.length === 1 && extras[0] !== pickerSystemOneKind)) return;
+    if (expected.size !== members.length - extras.length) return;
+    found.push({ node, members, systemOne: extras.length === 1 });
+  });
+  return { identifiers, sets: found };
+}
+function verifyPatchedPicker(target, source) {
+  const { sets } = pickerTypedKindSets(source, target);
+  const markers = count(source, pickerMarker);
+  if (markers > 1 || sets.length !== 1 || !sets[0].systemOne) fail(`Patched System One picker integrity failed:\n  ${path.relative(appRoot, target)}\n\nExpected one typed model-kind set that includes System One.`);
+}
 function discoverPickerCandidates() {
   const files = walk(path.join(appRoot, ".next")).filter((file) => file.endsWith(".js"));
+  const rejected = [];
   const candidates = files.filter((file) => {
     const source = fs.readFileSync(file, "utf8");
-    return (typedKindsPattern.test(source) || source.includes(pickerMarker)) && source.includes("kindFilter");
+    if (!source.includes("kindFilter")) return false;
+    const { identifiers, sets } = pickerTypedKindSets(source, file);
+    if (!identifiers.has("kindFilter")) return false;
+    if (sets.length === 1) return true;
+    rejected.push(`${path.relative(appRoot, file)} (${sets.length} typed model-kind sets)`);
+    return false;
   });
-  if (candidates.length !== 2) fail(`Model picker candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  kindFilter and the typed model-kind set`);
+  if (candidates.length !== 2) {
+    fail(`Model picker candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nAmbiguous files:\n  ${rejected.join("\n  ") || "none"}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  kindFilter and exactly one typed model-kind set of ${pickerTypedKinds.join(", ")}`);
+  }
   return candidates;
 }
 function patchPicker(targets) {
   let changed = false;
   for (const target of targets) {
     const source = fs.readFileSync(target, "utf8");
-    if (source.includes(pickerMarker)) {
-      if (count(source, pickerMarker) !== 1 || !source.includes('"imageToText","systemone"')) fail(`Patched System One picker integrity failed:\n  ${path.relative(appRoot, target)}`);
-      continue;
-    }
-    const matches = [...source.matchAll(new RegExp(typedKindsPattern.source, "g"))];
-    if (matches.length !== 1) fail(`Model picker typed-kind filtering is ambiguous:\n  ${path.relative(appRoot, target)}\n\nExpected exactly one typed model-kind set; found ${matches.length}.`);
-    const match = matches[0];
-    const patched = `${source.slice(0, match.index)}new Set(["image","tts","stt","embedding","imageToText","systemone"])/* ${pickerMarker} */${source.slice(match.index + match[0].length)}`;
-    if (count(patched, pickerMarker) !== 1 || !patched.includes('"imageToText","systemone"')) fail(`System One picker patch integrity failed:\n  ${path.relative(appRoot, target)}`);
+    const { sets } = pickerTypedKindSets(source, target);
+    if (sets.length !== 1) fail(`Model picker typed-kind filtering is ambiguous:\n  ${path.relative(appRoot, target)}\n\nExpected exactly one typed model-kind set; found ${sets.length}.`);
+    if (sets[0].systemOne) { verifyPatchedPicker(target, source); continue; }
+    const { node, members } = sets[0];
+    const replacement = `new Set([${[...members, pickerSystemOneKind].map((kind) => JSON.stringify(kind)).join(",")}])/* ${pickerMarker} */`;
+    const patched = `${source.slice(0, node.start)}${replacement}${source.slice(node.end)}`;
+    verifyPatchedPicker(target, patched);
     fs.writeFileSync(target, patched);
     changed = true;
   }
@@ -490,7 +529,8 @@ if (checkOnly) {
   }
   for (const target of picker) {
     const source = fs.readFileSync(target, "utf8");
-    if (source.includes(pickerMarker) && (count(source, pickerMarker) !== 1 || !source.includes('"imageToText","systemone"'))) fail(`Patched System One picker integrity failed:\n  ${path.relative(appRoot, target)}`);
+    if (source.includes(pickerMarker)) verifyPatchedPicker(target, source);
+    else if (pickerTypedKindSets(source, target).sets.length !== 1) fail(`Model picker typed-kind filtering is ambiguous:\n  ${path.relative(appRoot, target)}`);
   }
   console.log(`9Router Auto Router compatibility check passed: runtime=${path.relative(appRoot, runtime)} ui=${ui.map((file) => path.relative(appRoot, file)).join(",")} picker=${picker.map((file) => path.relative(appRoot, file)).join(",")}`);
 } else {
