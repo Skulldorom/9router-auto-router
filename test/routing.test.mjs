@@ -273,6 +273,57 @@ test("patcher fails closed without the normal picker typed-kind filter", () => {
   assert.match(result.stderr, /Model picker candidates/);
 });
 
+test("patcher accepts the upstream 0.5.109 native System One picker layout", () => {
+  const nativeKindSet = 'new Set(["image","tts","stt","embedding","imageToText","systemone"])';
+  const dir = fixture({
+    server: serverUi.replace('new Set(["image","tts","stt","embedding","imageToText"])', nativeKindSet),
+    client: clientUi.replace('new Set(["image","tts","stt","embedding","imageToText"])', nativeKindSet),
+  });
+  const result = patch(dir);
+  assert.equal(result.status, 0, result.stderr);
+  for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) {
+    assert.match(source, /new Set\(\["image","tts","stt","embedding","imageToText","systemone"\]\)/);
+    assert.ok(!source.includes("9router-auto-router-systemone-picker:v1"));
+    assert.equal((source.match(/new Set\(\["image"/g) || []).length, 1);
+  }
+  assert.equal(patch(dir, ["--check"]).status, 0);
+});
+
+test("patcher detects the picker typed-kind set structurally, not by literal formatting", () => {
+  const respaced = ['image', 'tts', 'stt', 'embedding', 'imageToText'].map((kind) => `'${kind}'`).join(", ");
+  const dir = fixture({
+    server: serverUi.replace('new Set(["image","tts","stt","embedding","imageToText"])', `new Set([${respaced},])`),
+    client: clientUi.replace('new Set(["image","tts","stt","embedding","imageToText"])', `new Set([${respaced}])`),
+  });
+  assert.equal(patch(dir).status, 0);
+  for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) {
+    assert.match(source, /new Set\(\["image","tts","stt","embedding","imageToText","systemone"\]\)\/\* 9router-auto-router-systemone-picker:v1 \*\//);
+  }
+  assert.equal(patch(dir, ["--check"]).status, 0);
+});
+
+test("patcher rejects a picker asset with multiple supported typed-kind sets", () => {
+  const nativeKindSet = 'new Set(["image","tts","stt","embedding","imageToText","systemone"])';
+  const result = patch(fixture({ server: `${serverUi}${nativeKindSet}` }));
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Model picker candidates/);
+});
+
+test("patcher rejects picker kind sets that add, drop, or duplicate a typed kind", () => {
+  const base = 'new Set(["image","tts","stt","embedding","imageToText"])';
+  for (const replacement of [
+    'new Set(["image","tts","stt","embedding","imageToText","video"])',
+    'new Set(["image","tts","stt","embedding"])',
+    'new Set(["image","tts","stt","embedding","imageToText","imageToText"])',
+    'new Set(["image","tts","stt","embedding","imageToText","systemone","video"])',
+  ]) {
+    const result = patch(fixture({ server: serverUi.replace(base, replacement) }));
+    assert.notEqual(result.status, 0, replacement);
+    assert.match(result.stderr, /Model picker candidates/, replacement);
+  }
+});
+
+
 
 // --- patcher robustness --------------------------------------------------------------------
 

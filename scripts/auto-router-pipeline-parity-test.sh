@@ -47,6 +47,14 @@ http.createServer((request, response) => {
   request.on("end", () => {
     const body = JSON.parse(raw);
     fs.appendFileSync("/journal/provider.jsonl", `${JSON.stringify({ url: request.url, body })}\n`);
+    // Ollama /api/chat streams newline-delimited chunks. A single unterminated object is
+    // indistinguishable from empty content, which upstream 0.5.109 now treats as a failure
+    // and falls through to the next combo model — that would fan out the parity capture.
+    if (body.stream) {
+      response.setHeader("content-type", "application/json");
+      response.end(`${JSON.stringify({ model: "mock", message: { role: "assistant", content: "ok" }, done: false })}\n${JSON.stringify({ model: "mock", message: { role: "assistant", content: "" }, done: true, done_reason: "stop" })}\n`);
+      return;
+    }
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify({ model: "mock", message: { role: "assistant", content: "ok" }, done: true }));
   });
