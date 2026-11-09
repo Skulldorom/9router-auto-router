@@ -253,21 +253,38 @@ function pickerCandidates(files) {
   });
   return { candidates, rejected };
 }
+function literalStrings(source, target) {
+  const values = new Set();
+  walkAst(parseJavaScript(source, target), null, (node) => {
+    if (node.type === "Literal" && typeof node.value === "string") values.add(node.value);
+  });
+  return values;
+}
+function routeChunkIds(source, target) {
+  const ids = new Set();
+  walkAst(parseJavaScript(source, target), null, (node) => {
+    if (node.type !== "CallExpression" || node.callee?.type !== "MemberExpression" || identifier(node.callee.property) !== "X" || node.arguments.length < 2 || node.arguments[1]?.type !== "ArrayExpression") return;
+    for (const element of node.arguments[1].elements) if (element?.type === "Literal" && Number.isInteger(element.value)) ids.add(String(element.value));
+  });
+  return ids;
+}
 function discoverPickerCandidates() {
   const files = walk(path.join(appRoot, ".next")).filter((file) => file.endsWith(".js") && !file.endsWith("-manifest.js"));
   const { candidates, rejected } = pickerCandidates(files);
   const serverRoute = path.join(appRoot, ".next/server/app/(dashboard)/dashboard/combos/page.js");
   const clientManifest = path.join(appRoot, ".next/server/app/(dashboard)/dashboard/combos/page_client-reference-manifest.js");
-  if (fs.existsSync(serverRoute) && fs.existsSync(clientManifest)) {
-    const route = fs.readFileSync(serverRoute, "utf8");
-    const manifest = fs.readFileSync(clientManifest, "utf8");
-    const owned = candidates.filter((file) => {
+  const hasRoute = fs.existsSync(serverRoute), hasManifest = fs.existsSync(clientManifest);
+  if (hasRoute !== hasManifest) fail(`Dashboard ModelSelectModal ownership metadata is incomplete.\n\nExpected both or neither:\n  ${path.relative(appRoot, serverRoute)}\n  ${path.relative(appRoot, clientManifest)}`);
+  if (hasRoute) {
+    const routeIds = routeChunkIds(fs.readFileSync(serverRoute, "utf8"), serverRoute);
+    const manifestPaths = literalStrings(fs.readFileSync(clientManifest, "utf8"), clientManifest);
+    const server = candidates.filter((file) => file.startsWith(path.join(appRoot, ".next/server/chunks")) && routeIds.has(path.basename(file, ".js")));
+    const client = candidates.filter((file) => {
       const relativeFile = path.relative(appRoot, file).split(path.sep).join("/");
-      const chunk = path.basename(file, ".js");
-      return (file.startsWith(path.join(appRoot, ".next/server/chunks")) && /^\d+$/.test(chunk) && new RegExp(`(?:^|[^0-9])${chunk}(?:[^0-9]|$)`).test(route)) || manifest.includes(relativeFile.replace(/^\.next\//, ""));
+      return relativeFile.startsWith(".next/static/chunks/") && manifestPaths.has(relativeFile.slice(".next/".length));
     });
-    if (owned.length === 2 && owned.some((file) => file.startsWith(path.join(appRoot, ".next/server/chunks"))) && owned.some((file) => file.includes(`${path.sep}.next${path.sep}static${path.sep}chunks${path.sep}`))) return owned;
-    fail(`Dashboard ModelSelectModal ownership is ambiguous.\n\nDashboard route:\n  ${path.relative(appRoot, serverRoute)}\n\nOwned picker assets:\n  ${relative(owned)}\n\nExpected exactly one server chunk referenced by the Combos route and one client chunk referenced by its client manifest.`);
+    if (server.length === 1 && client.length === 1) return [...server, ...client];
+    fail(`Dashboard ModelSelectModal ownership is ambiguous.\n\nDashboard route:\n  ${path.relative(appRoot, serverRoute)}\n\nOwned server picker assets:\n  ${relative(server)}\n\nOwned client picker assets:\n  ${relative(client)}\n\nExpected exactly one server chunk referenced by the Combos route and one client chunk referenced by its client manifest.`);
   }
   if (candidates.length !== 2) fail(`Model picker candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nAmbiguous files:\n  ${rejected.join("\n  ") || "none"}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  kindFilter and exactly one typed model-kind set of ${pickerTypedKinds.join(", ")}`);
   return candidates;
