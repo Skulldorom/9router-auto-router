@@ -240,8 +240,7 @@ function verifyPatchedPicker(target, source) {
   const markers = count(source, pickerMarker);
   if (markers > 1 || sets.length !== 1 || !sets[0].systemOne) fail(`Patched System One picker integrity failed:\n  ${path.relative(appRoot, target)}\n\nExpected one typed model-kind set that includes System One.`);
 }
-function discoverPickerCandidates() {
-  const files = walk(path.join(appRoot, ".next")).filter((file) => file.endsWith(".js"));
+function pickerCandidates(files) {
   const rejected = [];
   const candidates = files.filter((file) => {
     const source = fs.readFileSync(file, "utf8");
@@ -252,9 +251,25 @@ function discoverPickerCandidates() {
     rejected.push(`${path.relative(appRoot, file)} (${sets.length} typed model-kind sets)`);
     return false;
   });
-  if (candidates.length !== 2) {
-    fail(`Model picker candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nAmbiguous files:\n  ${rejected.join("\n  ") || "none"}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  kindFilter and exactly one typed model-kind set of ${pickerTypedKinds.join(", ")}`);
+  return { candidates, rejected };
+}
+function discoverPickerCandidates() {
+  const files = walk(path.join(appRoot, ".next")).filter((file) => file.endsWith(".js") && !file.endsWith("-manifest.js"));
+  const { candidates, rejected } = pickerCandidates(files);
+  const serverRoute = path.join(appRoot, ".next/server/app/(dashboard)/dashboard/combos/page.js");
+  const clientManifest = path.join(appRoot, ".next/server/app/(dashboard)/dashboard/combos/page_client-reference-manifest.js");
+  if (fs.existsSync(serverRoute) && fs.existsSync(clientManifest)) {
+    const route = fs.readFileSync(serverRoute, "utf8");
+    const manifest = fs.readFileSync(clientManifest, "utf8");
+    const owned = candidates.filter((file) => {
+      const relativeFile = path.relative(appRoot, file).split(path.sep).join("/");
+      const chunk = path.basename(file, ".js");
+      return (file.startsWith(path.join(appRoot, ".next/server/chunks")) && /^\d+$/.test(chunk) && new RegExp(`(?:^|[^0-9])${chunk}(?:[^0-9]|$)`).test(route)) || manifest.includes(relativeFile.replace(/^\.next\//, ""));
+    });
+    if (owned.length === 2 && owned.some((file) => file.startsWith(path.join(appRoot, ".next/server/chunks"))) && owned.some((file) => file.includes(`${path.sep}.next${path.sep}static${path.sep}chunks${path.sep}`))) return owned;
+    fail(`Dashboard ModelSelectModal ownership is ambiguous.\n\nDashboard route:\n  ${path.relative(appRoot, serverRoute)}\n\nOwned picker assets:\n  ${relative(owned)}\n\nExpected exactly one server chunk referenced by the Combos route and one client chunk referenced by its client manifest.`);
   }
+  if (candidates.length !== 2) fail(`Model picker candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nAmbiguous files:\n  ${rejected.join("\n  ") || "none"}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  kindFilter and exactly one typed model-kind set of ${pickerTypedKinds.join(", ")}`);
   return candidates;
 }
 function patchPicker(targets) {
