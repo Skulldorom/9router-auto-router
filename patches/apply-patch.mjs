@@ -240,8 +240,7 @@ function verifyPatchedPicker(target, source) {
   const markers = count(source, pickerMarker);
   if (markers > 1 || sets.length !== 1 || !sets[0].systemOne) fail(`Patched System One picker integrity failed:\n  ${path.relative(appRoot, target)}\n\nExpected one typed model-kind set that includes System One.`);
 }
-function discoverPickerCandidates() {
-  const files = walk(path.join(appRoot, ".next")).filter((file) => file.endsWith(".js"));
+function pickerCandidates(files) {
   const rejected = [];
   const candidates = files.filter((file) => {
     const source = fs.readFileSync(file, "utf8");
@@ -252,9 +251,42 @@ function discoverPickerCandidates() {
     rejected.push(`${path.relative(appRoot, file)} (${sets.length} typed model-kind sets)`);
     return false;
   });
-  if (candidates.length !== 2) {
-    fail(`Model picker candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nAmbiguous files:\n  ${rejected.join("\n  ") || "none"}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  kindFilter and exactly one typed model-kind set of ${pickerTypedKinds.join(", ")}`);
+  return { candidates, rejected };
+}
+function literalStrings(source, target) {
+  const values = new Set();
+  walkAst(parseJavaScript(source, target), null, (node) => {
+    if (node.type === "Literal" && typeof node.value === "string") values.add(node.value);
+  });
+  return values;
+}
+function routeChunkIds(source, target) {
+  const ids = new Set();
+  walkAst(parseJavaScript(source, target), null, (node) => {
+    if (node.type !== "CallExpression" || node.callee?.type !== "MemberExpression" || identifier(node.callee.property) !== "X" || node.arguments.length < 2 || node.arguments[1]?.type !== "ArrayExpression") return;
+    for (const element of node.arguments[1].elements) if (element?.type === "Literal" && Number.isInteger(element.value)) ids.add(String(element.value));
+  });
+  return ids;
+}
+function discoverPickerCandidates() {
+  const files = walk(path.join(appRoot, ".next")).filter((file) => file.endsWith(".js") && !file.endsWith("-manifest.js"));
+  const { candidates, rejected } = pickerCandidates(files);
+  const serverRoute = path.join(appRoot, ".next/server/app/(dashboard)/dashboard/combos/page.js");
+  const clientManifest = path.join(appRoot, ".next/server/app/(dashboard)/dashboard/combos/page_client-reference-manifest.js");
+  const hasRoute = fs.existsSync(serverRoute), hasManifest = fs.existsSync(clientManifest);
+  if (hasRoute !== hasManifest) fail(`Dashboard ModelSelectModal ownership metadata is incomplete.\n\nExpected both or neither:\n  ${path.relative(appRoot, serverRoute)}\n  ${path.relative(appRoot, clientManifest)}`);
+  if (hasRoute) {
+    const routeIds = routeChunkIds(fs.readFileSync(serverRoute, "utf8"), serverRoute);
+    const manifestPaths = literalStrings(fs.readFileSync(clientManifest, "utf8"), clientManifest);
+    const server = candidates.filter((file) => file.startsWith(path.join(appRoot, ".next/server/chunks")) && routeIds.has(path.basename(file, ".js")));
+    const client = candidates.filter((file) => {
+      const relativeFile = path.relative(appRoot, file).split(path.sep).join("/");
+      return relativeFile.startsWith(".next/static/chunks/") && manifestPaths.has(relativeFile.slice(".next/".length));
+    });
+    if (server.length === 1 && client.length === 1) return [...server, ...client];
+    fail(`Dashboard ModelSelectModal ownership is ambiguous.\n\nDashboard route:\n  ${path.relative(appRoot, serverRoute)}\n\nOwned server picker assets:\n  ${relative(server)}\n\nOwned client picker assets:\n  ${relative(client)}\n\nExpected exactly one server chunk referenced by the Combos route and one client chunk referenced by its client manifest.`);
   }
+  if (candidates.length !== 2) fail(`Model picker candidates:\n  ${candidates.length}\n\nCandidate files:\n  ${relative(candidates)}\n\nAmbiguous files:\n  ${rejected.join("\n  ") || "none"}\n\nExpected:\n  exactly 2 (server and client assets)\n\nRequired semantic anchors:\n  kindFilter and exactly one typed model-kind set of ${pickerTypedKinds.join(", ")}`);
   return candidates;
 }
 function patchPicker(targets) {

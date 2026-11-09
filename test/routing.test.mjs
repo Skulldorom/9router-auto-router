@@ -35,7 +35,7 @@ const clientUi = [
   'let gQ=new Set(["image","tts","stt","embedding","imageToText"]),gR={kindFilter:"llm"};',
 ].join("");
 
-function fixture({ duplicate = false, valid = true, shadow = false, handler: handlerOverride, server = serverUi, client = clientUi } = {}) {
+function fixture({ duplicate = false, valid = true, shadow = false, metadata = false, partialMetadata = false, handler: handlerOverride, server = serverUi, client = clientUi } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "auto-router-patch-"));
   const serverDir = path.join(dir, ".next/server/chunks");
   const serverUiDir = path.join(dir, ".next/server/app/dashboard/combos");
@@ -48,6 +48,13 @@ function fixture({ duplicate = false, valid = true, shadow = false, handler: han
   if (duplicate) fs.writeFileSync(path.join(serverDir, "another-handler.js"), `${runtime("c", "f", "d", "u", "k", "e", "r")}${nestedRuntime("a", "j", "b", "f", "g", "i", "h")}`);
   fs.writeFileSync(path.join(serverUiDir, "page.js"), server);
   fs.writeFileSync(path.join(clientUiDir, "page-93b8d96a5392ea57.js"), client);
+  if (metadata || partialMetadata) {
+    const routeDir = path.join(dir, ".next/server/app/(dashboard)/dashboard/combos");
+    fs.mkdirSync(routeDir, { recursive: true });
+    fs.writeFileSync(path.join(routeDir, "page.js"), 'b.X(0,[412],()=>b(b.s=1))');
+    fs.writeFileSync(path.join(serverDir, "412.js"), 'let a=new Set(["image","tts","stt","embedding","imageToText"]),b={kindFilter:"llm"};');
+    if (!partialMetadata) fs.writeFileSync(path.join(routeDir, "page_client-reference-manifest.js"), '"static/chunks/app/dashboard/combos/page-93b8d96a5392ea57.js"');
+  }
   return dir;
 }
 function patch(dir, extra = []) { return spawnSync(process.execPath, [patcher, dir, ...extra], { encoding: "utf8" }); }
@@ -257,6 +264,29 @@ test("Edit Combo renders primary and optional fallback Jev controls with Local s
   }
 });
 test("legacy model normalization and client/server output stay equivalent", () => { const dir = fixture(); assert.equal(patch(dir).status, 0); for (const source of uiFiles(dir).map((file) => fs.readFileSync(file, "utf8"))) { assert.match(source, /9router-auto-router-ui:v10/); assert.equal(source.split("9router-auto-router-ui:v10").length - 1, 1); assert.match(source, /onSave:_arSave/); parses(source); } });
+
+test("route metadata selects only structurally owned dashboard picker assets", () => {
+  const dir = fixture({ metadata: true });
+  const mitmServer = path.join(dir, ".next/server/chunks/3783.js");
+  const mitmClient = path.join(dir, ".next/static/chunks/9134-decoy.js");
+  fs.writeFileSync(mitmServer, 'let a=new Set(["image","tts","stt","embedding","imageToText"]),b={kindFilter:"llm"};'); fs.writeFileSync(mitmClient, 'let a=new Set(["image","tts","stt","embedding","imageToText"]),b={kindFilter:"llm"};');
+  assert.equal(patch(dir).status, 0);
+  assert.doesNotMatch(fs.readFileSync(mitmServer, "utf8"), /systemone/);
+  assert.doesNotMatch(fs.readFileSync(mitmClient, "utf8"), /systemone/);
+});
+test("partial dashboard ownership metadata fails closed", () => {
+  const result = patch(fixture({ partialMetadata: true }));
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ownership metadata is incomplete/);
+});
+test("dashboard ownership rejects partial and duplicate references", () => {
+  for (const route of ['b.X(0,[41],()=>b())', 'b.X(0,[412,3783],()=>b())']) {
+    const dir = fixture({ metadata: true });
+    fs.writeFileSync(path.join(dir, ".next/server/app/(dashboard)/dashboard/combos/page.js"), route);
+    if (route.includes("3783")) fs.writeFileSync(path.join(dir, ".next/server/chunks/3783.js"), 'let a=new Set(["image","tts","stt","embedding","imageToText"]),b={kindFilter:"llm"};');
+    const result = patch(dir); assert.notEqual(result.status, 0); assert.match(result.stderr, /ownership is ambiguous/);
+  }
+});
 
 test("patcher extends the normal picker typed kinds for System One only", () => {
   const dir = fixture(); assert.equal(patch(dir).status, 0);
