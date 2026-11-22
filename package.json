@@ -16,6 +16,6 @@
   "license": "MIT",
   "devDependencies": {
     "acorn": "^8.19.0",
-    "eslint": "^10.14.0"
+    "eslint": "^10.15.0"
   }
 }
